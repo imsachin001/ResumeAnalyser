@@ -1,0 +1,291 @@
+import React, { useState } from 'react';
+import './Home.css';
+import resumePreviewImg from '../../assets/images/image11.webp';
+import atsScoreImg from '../../assets/images/ats-score.webp';
+
+const Home = () => {
+  const [dragActive, setDragActive] = useState(false);
+
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileInput = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFile(e.target.files[0]);
+    }
+  };
+
+  const handleFile = (file) => {
+    console.log('File uploaded:', file);
+    // Add file processing logic here
+  };
+
+  return (
+    <div className="home-container">
+      <div className="home-content">
+        <div className="home-left">
+          <div className="section-tag">RESUME CHECKER</div>
+          <h1 className="home-title">
+            Is your resume good enough?
+          </h1>
+          <p className="home-description">
+            A free and fast AI resume checker doing 16 crucial checks to ensure your resume
+            is ready to perform and get you interview callbacks.
+          </p>
+          
+          <div 
+            className={`upload-box ${dragActive ? 'drag-active' : ''}`}
+            onDragEnter={handleDrag}
+            onDragLeave={handleDrag}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+          >
+            <div className="upload-content">
+              <p className="upload-text">
+                Drop your resume here or choose a file.
+              </p>
+              <p className="upload-subtext">
+                PDF & DOCX only. Max 2MB file size.
+              </p>
+              <label htmlFor="file-upload" className="upload-button">
+                Upload Your Resume
+              </label>
+              <input
+                id="file-upload"
+                type="file"
+                accept=".pdf,.docx"
+                onChange={handleFileInput}
+                style={{ display: 'none' }}
+              />
+              <div className="privacy-note">
+                <span className="lock-icon">🔒</span>
+                <span>Privacy guaranteed</span>
+              </div>
+            </div>
+      
+              {/* Checklist Section */}
+              <div className="checklist-section">
+                <div className="checklist-inner">
+                  <div className="checklist-left">
+                    <h2 className="checklist-title">Resume optimization checklist</h2>
+                    <p className="checklist-desc">We check for 16 crucial things across 5 different categories on your resume including content, file type, and keywords in the most important sections of your resume. Here’s a full list of the checks you’ll receive:</p>
+                  </div>
+
+                  <div className="checklist-right">
+                    <div className="cards-grid">
+                      <div className="card">
+                        <div className="card-icon">📄</div>
+                        <h3 className="card-title">Format</h3>
+                        <ul className="card-list">
+                          <li>File format and size</li>
+                          <li>Resume length</li>
+                          <li>Long bullet points with suggestions on how to shorten</li>
+                        </ul>
+                      </div>
+
+                      <div className="card">
+                        <div className="card-icon">📋</div>
+                        <h3 className="card-title">Resume sections</h3>
+                        <ul className="card-list">
+                          <li>Contact information</li>
+                          <li>Essential sections</li>
+                          <li>Personality showcase with tips on how to improve</li>
+                        </ul>
+                      </div>
+
+                      <div className="card">
+                        <div className="card-icon">✍️</div>
+                        <h3 className="card-title">Content</h3>
+                        <ul className="card-list">
+                          <li>ATS parse rate</li>
+                          <li>Repetition of words and phrases</li>
+                          <li>Spelling and grammar</li>
+                        </ul>
+                      </div>
+
+                      <div className="card">
+                        <div className="card-icon">💡</div>
+                        <h3 className="card-title">Skills suggestion</h3>
+                        <ul className="card-list">
+                          <li>Hard skills</li>
+                          <li>Soft skills</li>
+                        </ul>
+                      </div>
+
+                      <div className="card">
+                        <div className="card-icon">A</div>
+                        <h3 className="card-title">Style</h3>
+                        <ul className="card-list">
+                          <li>Resume design</li>
+                          <li>Email address</li>
+                          <li>Usage of active voice</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+          </div>
+        </div>
+
+        <div className="home-right">
+          <div className="preview-container">
+            <img 
+              src={resumePreviewImg} 
+              alt="Resume Preview" 
+              className="resume-preview"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ATS Score Section */}
+      <div className="ats-section">
+        <div className="ats-content">
+          <div className="ats-left">
+            <div className="ats-image-sticky">
+              <img 
+                src={atsScoreImg} 
+                alt="Resume Grader ATS Score" 
+                className="ats-score-image"
+              />
+            </div>
+          </div>
+
+          <div className="ats-right">
+            <div className="ats-info-block">
+              <h2 className="ats-main-title">
+                Enhancv's Resume Checker forms its ATS score with a two-tier system
+              </h2>
+              <p className="ats-description">
+                When you're applying for a job, there's a high chance your resume will be screened 
+                through an applicant tracking system way before it finds its way on a recruiter's 
+                screen. ATS helps hiring managers find the right candidates by searching for 
+                keywords and adding the resume to a database.
+              </p>
+              <p className="ats-description">
+                That's why the success of your resume is highly dependent on how optimized your 
+                resume is for the job you're applying for, the resume template you're using, and what 
+                skills and keywords you have included.
+              </p>
+            </div>
+
+            <div className="ats-feature">
+              <div className="feature-number">1</div>
+              <div className="feature-content">
+                <h3 className="feature-title">The proportion of content we can interpret</h3>
+                <p className="feature-description">
+                  Similar to an ATS, we analyze and attempt to comprehend your resume. The 
+                  greater our understanding of your resume, the more effectively it aligns with a 
+                  company's ATS.
+                </p>
+              </div>
+            </div>
+
+            <div className="ats-feature">
+              <div className="feature-number">2</div>
+              <div className="feature-content">
+                <h3 className="feature-title">What our checker identifies</h3>
+                <p className="feature-description">
+                  Although an ATS doesn't look for spelling mistakes and poorly crafted content, 
+                  recruitment managers certainly do. The second part of our score is based on the 
+                  quantifiable achievements you have in your resume and the quality of the written 
+                  content.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Checklist Section */}
+      <div className="checklist-section">
+        <div className="checklist-header">
+          <h2 className="checklist-main-title">Our AI-powered resume checker goes beyond typos and punctuation</h2>
+          <p className="checklist-subtitle">We've built-in ChatGPT to help you create a resume that's tailored to the position you're applying for.</p>
+        </div>
+        
+        <div className="checklist-inner">
+          <div className="checklist-left">
+            <h3 className="checklist-title">Resume optimization checklist</h3>
+            <p className="checklist-desc">We check for 16 crucial things across 5 different categories on your resume including content, file type, and keywords in the most important sections of your resume. Here's a full list of the checks you'll receive:</p>
+          </div>
+
+          <div className="checklist-right">
+            <div className="cards-grid">
+              <div className="card">
+                <div className="card-icon">📄</div>
+                <h3 className="card-title">Format</h3>
+                <ul className="card-list">
+                  <li>File format and size</li>
+                  <li>Resume length</li>
+                  <li>Long bullet points with suggestions on how to shorten</li>
+                </ul>
+              </div>
+
+              <div className="card">
+                <div className="card-icon">📋</div>
+                <h3 className="card-title">Resume sections</h3>
+                <ul className="card-list">
+                  <li>Contact information</li>
+                  <li>Essential sections</li>
+                  <li>Personality showcase with tips on how to improve</li>
+                </ul>
+              </div>
+
+              <div className="card">
+                <div className="card-icon">✍️</div>
+                <h3 className="card-title">Content</h3>
+                <ul className="card-list">
+                  <li>ATS parse rate</li>
+                  <li>Repetition of words and phrases</li>
+                  <li>Spelling and grammar</li>
+                  <li>Quantifying impact in experience section with examples</li>
+                </ul>
+              </div>
+
+              <div className="card">
+                <div className="card-icon">💡</div>
+                <h3 className="card-title">Skills suggestion</h3>
+                <ul className="card-list">
+                  <li>Hard skills</li>
+                  <li>Soft skills</li>
+                </ul>
+              </div>
+
+              <div className="card">
+                <div className="card-icon">A</div>
+                <h3 className="card-title">Style</h3>
+                <ul className="card-list">
+                  <li>Resume design</li>
+                  <li>Email address</li>
+                  <li>Usage of active voice</li>
+                  <li>Usage of buzzwords and cliches</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Home;
