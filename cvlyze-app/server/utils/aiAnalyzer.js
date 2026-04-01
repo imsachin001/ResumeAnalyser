@@ -343,6 +343,7 @@ PROVIDE ONLY THE JSON RESPONSE. NO ADDITIONAL TEXT OR MARKDOWN FORMATTING.`;
     return {
       ats_score: atsResult.total,
       ats_breakdown: atsResult.breakdown,
+      ats_improvements: this.createFallbackAtsImprovements(atsResult, detectedDomain),
       match_score: matchScore,
       matched_skills: [...new Set([...matchedSkills, ...matchedDomainSkills])],
       missing_skills: this.identifyMissingDomainSkills(matchedDomainSkills, domainSkills),
@@ -779,11 +780,27 @@ PROVIDE ONLY THE JSON RESPONSE. NO ADDITIONAL TEXT OR MARKDOWN FORMATTING.`;
         analysisData = this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, atsResult, experienceTimeline);
       }
 
+      // Gemini-driven ATS improvement cards
+      let atsImprovements = [];
+      try {
+        atsImprovements = await this.generateAtsImprovements(
+          parsedData,
+          atsResult,
+          detectedDomain,
+          jobDescription,
+          apiKey
+        );
+      } catch (atsImprovementError) {
+        console.error('Error generating ATS improvements:', atsImprovementError);
+        atsImprovements = this.createFallbackAtsImprovements(atsResult, detectedDomain);
+      }
+
       // Merge with calculated scores and metadata
       const finalAnalysis = {
         ...analysisData,
         ats_score: atsResult.total,
         ats_breakdown: atsResult.breakdown,
+        ats_improvements: atsImprovements,
         detected_domain: detectedDomain.name,
         domain_match_score: detectedDomain.score,
         experience_summary: `${experienceTimeline.totalYears} yrs total, ${experienceTimeline.roleCount} ${experienceTimeline.roleCount === 1 ? 'role' : 'roles'}`,
@@ -914,6 +931,136 @@ IMPORTANT:
         }
       };
     }
+  }
+
+  /**
+   * Generate ATS improvement cards using Gemini
+   */
+  async generateAtsImprovements(parsedData, atsResult, detectedDomain, jobDescription, apiKey) {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
+
+    const maxScores = {
+      contact: 15,
+      sections: 20,
+      keywords: 40,
+      actionVerbs: 10,
+      formatting: 10,
+      experienceBonus: 5
+    };
+
+    const domainSkills = detectedDomain?.template?.important_skills || [];
+    const domainKeywords = detectedDomain?.template?.keywords || [];
+
+    const prompt = `You are an ATS improvement coach. Generate actionable cards to improve low-scoring ATS areas.
+
+INPUT CONTEXT (JSON):
+${JSON.stringify({
+  domain: detectedDomain?.name || 'Unknown',
+  jobDescription: jobDescription || '',
+  scores: atsResult.breakdown,
+  maxScores,
+  resumeSignals: {
+    hasLinkedIn: !!parsedData.contact?.linkedin,
+    hasGitHub: !!parsedData.contact?.github,
+    hasPortfolio: !!parsedData.contact?.portfolio,
+    hasProjects: Array.isArray(parsedData.sections?.projects) && parsedData.sections.projects.length > 0,
+    hasExperience: Array.isArray(parsedData.sections?.experience) && parsedData.sections.experience.length > 0,
+    skillsList: parsedData.skills_list || []
+  },
+  domainSkills: domainSkills.slice(0, 18),
+  domainKeywords: domainKeywords.slice(0, 18)
+}, null, 2)}
+
+RULES:
+1. Focus ONLY on low-scoring areas (score < 70% of max).
+2. Return 2-4 cards total. If only one area is low, include the next weakest area.
+3. Each card must include: area, score, maxScore, priority (high/medium/low), whatToAdd (3-5), whatToAvoid (2-4), quickWins (2-4).
+4. Make advice specific to the detected domain and likely ATS parsing behavior.
+5. Use concise, resume-ready phrasing. No markdown.
+
+RESPONSE JSON FORMAT ONLY:
+{
+  "ats_improvements": [
+    {
+      "area": "Keywords",
+      "score": 12,
+      "maxScore": 40,
+      "priority": "high",
+      "whatToAdd": ["Add skill keywords like React, Node.js, MongoDB", "Include role-specific tools from job description"],
+      "whatToAvoid": ["Keyword stuffing in a single line", "Unclear abbreviations without full terms"],
+      "quickWins": ["Mirror 3-5 exact JD phrases", "Add a Skills subsection with 2-3 categories"]
+    }
+  ]
+}`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    let text = response.text();
+
+    text = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(text);
+
+    return Array.isArray(parsed.ats_improvements)
+      ? parsed.ats_improvements
+      : [];
+  }
+
+  /**
+   * Create fallback ATS improvement cards without Gemini
+   */
+  createFallbackAtsImprovements(atsResult, detectedDomain) {
+    const maxScores = {
+      contact: 15,
+      sections: 20,
+      keywords: 40,
+      actionVerbs: 10,
+      formatting: 10,
+      experienceBonus: 5
+    };
+
+    const areaLabels = {
+      contact: 'Contact Details',
+      sections: 'Resume Sections',
+      keywords: 'Keywords',
+      actionVerbs: 'Action Verbs',
+      formatting: 'Formatting',
+      experienceBonus: 'Experience Depth'
+    };
+
+    const scores = atsResult.breakdown || {};
+    const sortedAreas = Object.keys(maxScores)
+      .map(key => {
+        const maxScore = maxScores[key];
+        const score = scores[key] || 0;
+        return { key, score, maxScore, ratio: maxScore ? score / maxScore : 0 };
+      })
+      .sort((a, b) => a.ratio - b.ratio);
+
+    const lowAreas = sortedAreas.filter(area => area.ratio < 0.7);
+    const selected = lowAreas.length >= 2
+      ? lowAreas.slice(0, 3)
+      : sortedAreas.slice(0, 2);
+
+    return selected.map(area => ({
+      area: areaLabels[area.key] || area.key,
+      score: area.score,
+      maxScore: area.maxScore,
+      priority: area.ratio < 0.4 ? 'high' : area.ratio < 0.7 ? 'medium' : 'low',
+      whatToAdd: [
+        'Add clear, ATS-friendly section headings',
+        `Include ${detectedDomain?.name || 'role'}-specific keywords in Skills and Experience`,
+        'Use short, metric-driven bullet points'
+      ],
+      whatToAvoid: [
+        'Avoid graphics, tables, or multi-column layouts',
+        'Do not hide keywords in headers or footers'
+      ],
+      quickWins: [
+        'Add 3-5 measurable achievements',
+        'Mirror 3-5 exact phrases from the job description'
+      ]
+    }));
   }
 }
 

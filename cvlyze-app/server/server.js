@@ -145,6 +145,15 @@ app.post('/api/analyze', upload.single('resume'), async (req, res) => {
       };
     }
 
+    // Ensure resume title/name is available for saving
+    const fallbackTitle = path.parse(req.file.originalname).name || 'Untitled Resume';
+    const extractedTitle = parsedData.contact?.name || parsedData.name || fallbackTitle;
+    analysisResult.parsed_data = analysisResult.parsed_data || {};
+    if (!analysisResult.parsed_data.name) {
+      analysisResult.parsed_data.name = extractedTitle;
+    }
+    analysisResult.parsed_data.resume_title = fallbackTitle;
+
     // Clean up uploaded file
     await deleteFileWithRetry(filePath);
 

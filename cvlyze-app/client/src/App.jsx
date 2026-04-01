@@ -3,6 +3,7 @@ import Navbar from './components/Navbar/Navbar';
 import Home from './components/Home/Home';
 import AnalysisLoading from './components/AnalysisLoading/AnalysisLoading';
 import Analysis from './components/Analysis/Analysis';
+import SavedAnalyses from './components/SavedAnalyses/SavedAnalyses';
 import './App.css';
 
 function App() {
@@ -32,6 +33,14 @@ function App() {
     setError(null);
   };
 
+  const handleNavigate = (page) => {
+    if (page === 'home') {
+      navigateToHome();
+      return;
+    }
+    setCurrentPage(page);
+  };
+
   const handleError = (errorMessage) => {
     setError(errorMessage);
     alert(`Error: ${errorMessage}`);
@@ -40,7 +49,7 @@ function App() {
 
   return (
     <div className="App">
-      <Navbar />
+      <Navbar onNavigate={handleNavigate} />
       {currentPage === 'home' && <Home onNavigateToAnalysis={navigateToLoading} />}
       {currentPage === 'loading' && (
         <AnalysisLoading 
@@ -54,6 +63,12 @@ function App() {
         <Analysis 
           data={analysisResult}
           onBackToHome={navigateToHome}
+        />
+      )}
+      {currentPage === 'saved' && (
+        <SavedAnalyses
+          onBackToHome={navigateToHome}
+          onViewAnalysis={navigateToAnalysis}
         />
       )}
     </div>

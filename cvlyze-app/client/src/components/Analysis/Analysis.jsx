@@ -163,13 +163,17 @@ const Analysis = ({ data, onBackToHome }) => {
   const [expandedRole, setExpandedRole] = useState(null);
   const [roleDetailsCache, setRoleDetailsCache] = useState({});
   const [loadingRoleDetails, setLoadingRoleDetails] = useState({});
+  const [saveMessage, setSaveMessage] = useState('');
   const reportRef = useRef(null);
+
+  const savedStorageKey = 'cvlyze_saved_analyses';
 
   // Extract data with defaults
   const {
     match_score = 0,
     ats_score = 0,
     ats_breakdown = {},
+    ats_improvements = [],
     matched_skills = [],
     missing_skills = [],
     summary = '',
@@ -184,6 +188,7 @@ const Analysis = ({ data, onBackToHome }) => {
     section_completeness = {},
     top_skills = []
   } = data || {};
+
 
   // Animate scores on mount
   useEffect(() => {
@@ -222,6 +227,63 @@ const Analysis = ({ data, onBackToHome }) => {
     if (score >= 75) return 'linear-gradient(135deg, #22c55e, #16a34a)';
     if (score >= 50) return 'linear-gradient(135deg, #eab308, #ca8a04)';
     return 'linear-gradient(135deg, #ef4444, #dc2626)';
+  };
+
+  const handleSaveAnalysis = () => {
+    if (!data) return;
+
+    const now = new Date();
+    const resumeName = parsed_data.resume_title || parsed_data.name || 'Untitled Resume';
+    const fingerprint = JSON.stringify({
+      name: resumeName,
+      atsScore: ats_score,
+      matchScore: match_score,
+      domain: detected_domain,
+      topSkills: top_skills || [],
+      missingSkills: missing_skills || []
+    });
+
+    const entry = {
+      id: `${now.getTime()}-${Math.round(Math.random() * 10000)}`,
+      fingerprint,
+      name: resumeName,
+      savedAt: now.toISOString(),
+      summary: summary || '',
+      atsScore: ats_score,
+      matchScore: match_score,
+      domain: detected_domain,
+      topSkills: top_skills || [],
+      missingSkills: missing_skills || [],
+      recommendations: recommendations || [],
+      strengths: strengths || [],
+      weaknesses: weaknesses || [],
+      analysis: data
+    };
+
+    try {
+      const existing = localStorage.getItem(savedStorageKey);
+      const parsed = existing ? JSON.parse(existing) : [];
+      const list = Array.isArray(parsed) ? parsed : [];
+
+      if (list.some(item => item.fingerprint === fingerprint)) {
+        setSaveMessage('This analysis is already saved.');
+        return;
+      }
+
+      const updated = [entry, ...list];
+      localStorage.setItem(savedStorageKey, JSON.stringify(updated));
+      setSaveMessage('Analysis saved successfully.');
+    } catch (error) {
+      console.warn('Failed to save analysis:', error);
+      setSaveMessage('Failed to save analysis.');
+    }
+  };
+
+  const getPriorityLabel = (priority) => {
+    if (priority === 'high') return 'High Priority';
+    if (priority === 'medium') return 'Medium Priority';
+    if (priority === 'low') return 'Low Priority';
+    return 'Priority';
   };
 
   // Categorize skills
@@ -624,6 +686,69 @@ const Analysis = ({ data, onBackToHome }) => {
           )}
         </div>
 
+        {/* ATS Improvement Cards */}
+        {ats_improvements && ats_improvements.length > 0 && (
+          <div className="ats-improvements-section">
+            <h2>🧭 ATS Improvement Breakdown</h2>
+            <p className="ats-improvements-subtitle">
+              Focus on the lowest scoring areas first. These tips are tailored by Gemini AI.
+            </p>
+            <div className="ats-improvements-grid">
+              {ats_improvements.map((card, index) => (
+                <div
+                  key={`${card.area || 'ats-area'}-${index}`}
+                  className={`ats-improvement-card ${card.priority || 'medium'}`}
+                >
+                  <div className="ats-improvement-header">
+                    <div>
+                      <h3>{card.area}</h3>
+                      <span className="ats-score-pill">
+                        {card.score}/{card.maxScore}
+                      </span>
+                    </div>
+                    <span className={`priority-pill ${card.priority || 'medium'}`}>
+                      {getPriorityLabel(card.priority)}
+                    </span>
+                  </div>
+
+                  {card.whatToAdd && card.whatToAdd.length > 0 && (
+                    <div className="ats-improvement-block">
+                      <h4>✅ What to add</h4>
+                      <ul>
+                        {card.whatToAdd.map((item, i) => (
+                          <li key={`add-${index}-${i}`}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {card.whatToAvoid && card.whatToAvoid.length > 0 && (
+                    <div className="ats-improvement-block">
+                      <h4>⛔ What to avoid</h4>
+                      <ul>
+                        {card.whatToAvoid.map((item, i) => (
+                          <li key={`avoid-${index}-${i}`}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {card.quickWins && card.quickWins.length > 0 && (
+                    <div className="ats-improvement-block">
+                      <h4>⚡ Quick wins</h4>
+                      <ul>
+                        {card.quickWins.map((item, i) => (
+                          <li key={`quick-${index}-${i}`}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Summary with Highlighted Skills */}
         {summary && (
           <div className="summary-section">
@@ -849,7 +974,15 @@ const Analysis = ({ data, onBackToHome }) => {
           <button onClick={onBackToHome} className="back-button">
             Analyze Another Resume
           </button>
+          <button onClick={handleSaveAnalysis} className="save-button">
+            Save this Analysis
+          </button>
         </div>
+        {saveMessage && (
+          <div className="save-message">
+            {saveMessage}
+          </div>
+        )}
       </div>
     </div>
   );

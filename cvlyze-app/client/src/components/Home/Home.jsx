@@ -119,6 +119,7 @@ const Home = ({ onNavigateToAnalysis }) => {
         </div>
       </div>
 
+
       {/* ATS Score Section */}
       <div className="ats-section">
         <div className="ats-content">

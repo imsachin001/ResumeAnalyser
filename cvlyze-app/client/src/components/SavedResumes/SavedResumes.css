@@ -1,0 +1,351 @@
+.saved-resumes-page {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 2rem;
+}
+
+.saved-resumes-container {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.page-header {
+  text-align: center;
+  color: white;
+  margin-bottom: 3rem;
+}
+
+.page-header h1 {
+  font-size: 3rem;
+  margin: 0 0 1rem 0;
+  font-weight: 700;
+}
+
+.page-subtitle {
+  font-size: 1.3rem;
+  opacity: 0.95;
+  margin: 0;
+}
+
+/* Empty State */
+.empty-state {
+  background: white;
+  border-radius: 20px;
+  padding: 4rem 2rem;
+  text-align: center;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.empty-icon {
+  font-size: 5rem;
+  margin-bottom: 1.5rem;
+}
+
+.empty-state h2 {
+  color: #1f2937;
+  font-size: 2rem;
+  margin: 0 0 1rem 0;
+}
+
+.empty-state p {
+  color: #6b7280;
+  font-size: 1.2rem;
+  margin: 0 0 2rem 0;
+}
+
+.analyze-first-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 1.2rem 3rem;
+  border-radius: 50px;
+  font-size: 1.2rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 1rem;
+  transition: all 0.3s ease;
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+}
+
+.analyze-first-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 35px rgba(102, 126, 234, 0.4);
+}
+
+/* Saved Resumes Grid */
+.saved-resumes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 2rem;
+  margin-bottom: 3rem;
+}
+
+.saved-resume-card {
+  background: white;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.saved-resume-card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.2);
+}
+
+.saved-resume-screenshot {
+  position: relative;
+  width: 100%;
+  height: 220px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+}
+
+.saved-resume-screenshot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.saved-resume-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.saved-resume-card:hover .saved-resume-overlay {
+  opacity: 1;
+}
+
+.view-resume-btn,
+.delete-resume-btn {
+  color: white;
+  border: none;
+  padding: 0.8rem 1.5rem;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.view-resume-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.view-resume-btn:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+  transform: scale(1.05);
+}
+
+.delete-resume-btn {
+  background: #ef4444;
+}
+
+.delete-resume-btn:hover {
+  background: #dc2626;
+  transform: scale(1.05);
+}
+
+.saved-resume-info {
+  padding: 1.5rem;
+}
+
+.saved-resume-name {
+  color: #1f2937;
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin: 0 0 1rem 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-resume-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  margin-bottom: 1.2rem;
+}
+
+.saved-resume-date,
+.saved-resume-domain {
+  font-size: 0.9rem;
+  color: #6b7280;
+  background: #f3f4f6;
+  padding: 0.4rem 1rem;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.saved-resume-scores {
+  display: flex;
+  gap: 1rem;
+}
+
+.saved-score-badge {
+  flex: 1;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 1rem;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.saved-score-badge.ats {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+}
+
+.saved-score-badge.match {
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+}
+
+.saved-score-badge .score-label {
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.saved-score-badge .score-value {
+  color: white;
+  font-size: 1.8rem;
+  font-weight: 700;
+}
+
+/* Bottom Action Section */
+.bottom-action-section {
+  background: white;
+  border-radius: 20px;
+  padding: 3rem 2rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+}
+
+.analyze-another-container {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.analyze-another-content {
+  text-align: center;
+}
+
+.analyze-another-content h3 {
+  color: #1f2937;
+  font-size: 2rem;
+  margin: 0 0 0.8rem 0;
+  font-weight: 700;
+}
+
+.analyze-another-content p {
+  color: #6b7280;
+  font-size: 1.1rem;
+  margin: 0 0 2rem 0;
+}
+
+.analyze-another-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 1.2rem 3rem;
+  border-radius: 50px;
+  font-size: 1.2rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 1rem;
+  transition: all 0.3s ease;
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+}
+
+.analyze-another-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 35px rgba(102, 126, 234, 0.4);
+}
+
+.analyze-another-btn .btn-icon {
+  font-size: 1.5rem;
+}
+
+.analyze-another-btn .btn-arrow {
+  font-size: 1.5rem;
+  transition: transform 0.3s ease;
+}
+
+.analyze-another-btn:hover .btn-arrow {
+  transform: translateX(5px);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .saved-resumes-page {
+    padding: 1rem;
+  }
+
+  .page-header h1 {
+    font-size: 2rem;
+  }
+
+  .page-subtitle {
+    font-size: 1rem;
+  }
+
+  .saved-resumes-grid {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+
+  .bottom-action-section {
+    padding: 2rem 1rem;
+  }
+
+  .analyze-another-content h3 {
+    font-size: 1.5rem;
+  }
+
+  .analyze-another-content p {
+    font-size: 1rem;
+  }
+
+  .analyze-another-btn {
+    padding: 1rem 2rem;
+    font-size: 1rem;
+  }
+
+  .empty-state {
+    padding: 3rem 1.5rem;
+  }
+
+  .empty-icon {
+    font-size: 4rem;
+  }
+
+  .empty-state h2 {
+    font-size: 1.5rem;
+  }
+
+  .empty-state p {
+    font-size: 1rem;
+  }
+}

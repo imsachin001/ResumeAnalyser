@@ -49,6 +49,7 @@
   margin: 0;
 }
 
+
 .navbar-link {
   color: #4a5568;
   text-decoration: none;
@@ -56,6 +57,10 @@
   font-weight: 500;
   transition: color 0.3s ease;
   position: relative;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
 }
 
 .navbar-link:hover {
