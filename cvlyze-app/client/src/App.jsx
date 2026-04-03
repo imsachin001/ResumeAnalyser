@@ -4,6 +4,7 @@ import Home from './components/Home/Home';
 import AnalysisLoading from './components/AnalysisLoading/AnalysisLoading';
 import Analysis from './components/Analysis/Analysis';
 import SavedAnalyses from './components/SavedAnalyses/SavedAnalyses';
+import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
 
 function App() {
@@ -52,24 +53,30 @@ function App() {
       <Navbar onNavigate={handleNavigate} />
       {currentPage === 'home' && <Home onNavigateToAnalysis={navigateToLoading} />}
       {currentPage === 'loading' && (
-        <AnalysisLoading 
-          resumeFile={resumeFile}
-          jobDescription={jobDescription}
-          onComplete={navigateToAnalysis}
-          onError={handleError}
-        />
+        <ProtectedRoute>
+          <AnalysisLoading 
+            resumeFile={resumeFile}
+            jobDescription={jobDescription}
+            onComplete={navigateToAnalysis}
+            onError={handleError}
+          />
+        </ProtectedRoute>
       )}
       {currentPage === 'analysis' && (
-        <Analysis 
-          data={analysisResult}
-          onBackToHome={navigateToHome}
-        />
+        <ProtectedRoute>
+          <Analysis 
+            data={analysisResult}
+            onBackToHome={navigateToHome}
+          />
+        </ProtectedRoute>
       )}
       {currentPage === 'saved' && (
-        <SavedAnalyses
-          onBackToHome={navigateToHome}
-          onViewAnalysis={navigateToAnalysis}
-        />
+        <ProtectedRoute>
+          <SavedAnalyses
+            onBackToHome={navigateToHome}
+            onViewAnalysis={navigateToAnalysis}
+          />
+        </ProtectedRoute>
       )}
     </div>
   );

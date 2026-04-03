@@ -14,7 +14,11 @@ npm install
 - Add your Gemini API key to `.env`:
 ```
 GEMINI_API_KEY=your_actual_api_key_here
+CLERK_SECRET_KEY=your_clerk_secret_key_here
+CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key_here
 PORT=5000
+## Optional: override frontend origin for CORS
+# CORS_ORIGIN=http://localhost:3000
 ```
 
 3. **Run the server:**
@@ -44,6 +48,8 @@ POST /api/analyze
 - `resume`: PDF or DOCX file
 - `jobDescription`: (optional) Job description text
 
+**Auth:** Requires `Authorization: Bearer <clerk_token>`
+
 **Response:**
 ```json
 {
@@ -71,6 +77,12 @@ POST /api/analyze
 ```
 GET /api/config/check
 ```
+
+### Role Details
+```
+POST /api/role-details
+```
+**Auth:** Requires `Authorization: Bearer <clerk_token>`
 
 ## Project Structure
 

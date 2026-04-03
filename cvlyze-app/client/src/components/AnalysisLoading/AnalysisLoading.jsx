@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '@clerk/clerk-react';
 import './AnalysisLoading.css';
 import ApiService from '../../services/api';
 
 const AnalysisLoading = ({ resumeFile, jobDescription, onComplete, onError }) => {
+  const { getToken } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
   const [progress, setProgress] = useState(0);
   const [analysisData, setAnalysisData] = useState(null);
@@ -25,7 +27,8 @@ const AnalysisLoading = ({ resumeFile, jobDescription, onComplete, onError }) =>
     // Start API call immediately
     const analyzeResume = async () => {
       try {
-        const result = await ApiService.analyzeResume(resumeFile, jobDescription);
+        const token = await getToken();
+        const result = await ApiService.analyzeResume(resumeFile, jobDescription, token);
         console.log('API Response:', result);
         setAnalysisData(result.data);
         
@@ -66,7 +69,7 @@ const AnalysisLoading = ({ resumeFile, jobDescription, onComplete, onError }) =>
     return () => {
       clearInterval(progressInterval);
     };
-  }, [resumeFile, jobDescription]);
+  }, [resumeFile, jobDescription, getToken, onComplete, onError]);
 
   return (
     <div className="analysis-loading-page">

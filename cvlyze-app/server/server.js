@@ -7,13 +7,16 @@ require('dotenv').config();
 
 const resumeParser = require('./utils/resumeParserEnhanced');
 const aiAnalyzer = require('./utils/aiAnalyzer');
+const { clerkMiddleware, requireAuth } = require('./middleware/authMiddleware');
 
 const app = express();
 
 // Middleware
-app.use(cors());
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(clerkMiddleware({ publishableKey: process.env.CLERK_PUBLISHABLE_KEY }));
 
 // Configuration
 const UPLOAD_FOLDER = 'uploads';
@@ -55,6 +58,45 @@ const upload = multer({
   }
 });
 
+const validateResumeContent = (parsedData) => {
+  const rawText = parsedData?.raw_text || '';
+  const contact = parsedData?.contact || {};
+  const skillsCount = parsedData?.skills_list?.length || 0;
+  const hasProjects = (parsedData?.projects || []).length > 0;
+  const hasEducation = (parsedData?.education || []).length > 0;
+  const hasExperience = (parsedData?.experience || []).length > 0;
+  const hasSummary = !!parsedData?.summary;
+  const hasContact = !!(contact.email || contact.phone || contact.linkedin || contact.github || contact.portfolio);
+
+  const trimmedLength = rawText.replace(/\s/g, '').length;
+  const hasEnoughText = trimmedLength >= 200;
+
+  const signals = [
+    hasContact,
+    skillsCount >= 1,
+    hasProjects,
+    hasEducation,
+    hasSummary
+  ];
+
+  const signalCount = signals.filter(Boolean).length;
+  const isValid = hasEnoughText && signalCount >= 2;
+
+  return {
+    isValid,
+    details: {
+      hasEnoughText,
+      signalCount,
+      skillsCount,
+      hasContact,
+      hasProjects,
+      hasEducation,
+      hasExperience,
+      hasSummary
+    }
+  };
+};
+
 // Helper function to delete file with retry
 const deleteFileWithRetry = async (filePath, retries = 3) => {
   for (let i = 0; i < retries; i++) {
@@ -81,7 +123,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Main analysis endpoint
-app.post('/api/analyze', upload.single('resume'), async (req, res) => {
+app.post('/api/analyze', requireAuth, upload.single('resume'), async (req, res) => {
   let filePath = null;
 
   try {
@@ -101,6 +143,16 @@ app.post('/api/analyze', upload.single('resume'), async (req, res) => {
 
     // Step 1: Parse resume
     const parsedData = await resumeParser.parseResume(filePath, fileType);
+
+    const validation = validateResumeContent(parsedData);
+    if (!validation.isValid) {
+      await deleteFileWithRetry(filePath);
+      return res.status(400).json({
+        success: false,
+        error: 'Uploaded file does not look like a resume. Please upload a resume with contact details and skills/experience sections.',
+        details: validation.details
+      });
+    }
     
     // DEBUG: Log parsed data
     console.log('\n=== PARSED RESUME DATA ===');
@@ -190,7 +242,7 @@ app.get('/api/config/check', (req, res) => {
 });
 
 // Get detailed role information endpoint
-app.post('/api/role-details', async (req, res) => {
+app.post('/api/role-details', requireAuth, async (req, res) => {
   try {
     const { roleName, userSkills, matchedSkills, missingSkills } = req.body;
 

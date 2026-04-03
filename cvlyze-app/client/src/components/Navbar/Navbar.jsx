@@ -1,4 +1,5 @@
 import React from 'react';
+import { SignedIn, SignedOut, SignInButton, SignUpButton, UserButton } from '@clerk/clerk-react';
 import './Navbar.css';
 
 const Navbar = ({ onNavigate }) => {
@@ -18,8 +19,17 @@ const Navbar = ({ onNavigate }) => {
           </li>
         </ul>
         <div className="navbar-actions">
-          <button className="btn-signin">Sign in</button>
-          <button className="btn-getstarted">Get Started</button>
+          <SignedOut>
+            <SignInButton mode="modal">
+              <button className="btn-signin">Sign in</button>
+            </SignInButton>
+            <SignUpButton mode="modal">
+              <button className="btn-getstarted">Get Started</button>
+            </SignUpButton>
+          </SignedOut>
+          <SignedIn>
+            <UserButton appearance={{ elements: { userButtonAvatarBox: 'navbar-user-avatar' } }} />
+          </SignedIn>
         </div>
       </div>
     </nav>

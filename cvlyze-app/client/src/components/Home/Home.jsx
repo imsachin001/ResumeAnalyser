@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
+import { SignedIn, SignedOut, SignInButton, useAuth } from '@clerk/clerk-react';
 import './Home.css';
 import resumePreviewImg from '../../assets/images/image11.webp';
 import atsScoreImg from '../../assets/images/ats-score.webp';
 
 const Home = ({ onNavigateToAnalysis }) => {
+  const { isSignedIn } = useAuth();
   const [dragActive, setDragActive] = useState(false);
   const [jobDescription, setJobDescription] = useState('');
 
@@ -21,6 +23,10 @@ const Home = ({ onNavigateToAnalysis }) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
+
+    if (!isSignedIn) {
+      return;
+    }
     
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       handleFile(e.dataTransfer.files[0]);
@@ -28,12 +34,18 @@ const Home = ({ onNavigateToAnalysis }) => {
   };
 
   const handleFileInput = (e) => {
+    if (!isSignedIn) {
+      return;
+    }
     if (e.target.files && e.target.files[0]) {
       handleFile(e.target.files[0]);
     }
   };
 
   const handleFile = (file) => {
+    if (!isSignedIn) {
+      return;
+    }
     // Check if it's a PDF or DOCX file
     const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
     
@@ -62,7 +74,7 @@ const Home = ({ onNavigateToAnalysis }) => {
           </p>
           
           <div 
-            className={`upload-box ${dragActive ? 'drag-active' : ''}`}
+            className={`upload-box ${dragActive ? 'drag-active' : ''} ${!isSignedIn ? 'upload-locked' : ''}`}
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
@@ -75,18 +87,28 @@ const Home = ({ onNavigateToAnalysis }) => {
               <p className="upload-subtext">
                 PDF & DOCX only. Max 10MB file size.
               </p>
-              <label htmlFor="file-upload" className="upload-button">
-                Upload Your Resume
-              </label>
+              <SignedIn>
+                <label htmlFor="file-upload" className="upload-button">
+                  Upload Your Resume
+                </label>
+              </SignedIn>
+              <SignedOut>
+                <SignInButton mode="modal">
+                  <button className="upload-button upload-button-locked">
+                    Sign in to upload
+                  </button>
+                </SignInButton>
+              </SignedOut>
               <input
                 id="file-upload"
                 type="file"
                 accept=".pdf,.docx"
                 onChange={handleFileInput}
+                disabled={!isSignedIn}
                 style={{ display: 'none' }}
               />
               
-              <div className="job-description-section">
+              <div className={`job-description-section ${!isSignedIn ? 'jd-locked' : ''}`}>
                 <label htmlFor="job-description" className="jd-label">
                   Job Description (Optional)
                 </label>
@@ -97,6 +119,7 @@ const Home = ({ onNavigateToAnalysis }) => {
                   value={jobDescription}
                   onChange={(e) => setJobDescription(e.target.value)}
                   rows="4"
+                  disabled={!isSignedIn}
                 />
               </div>
               
@@ -104,6 +127,11 @@ const Home = ({ onNavigateToAnalysis }) => {
                 <span className="lock-icon">🔒</span>
                 <span>Privacy guaranteed</span>
               </div>
+              <SignedOut>
+                <div className="auth-required-note">
+                  Sign in to upload and save your analyses.
+                </div>
+              </SignedOut>
             </div>
           </div>
         </div>

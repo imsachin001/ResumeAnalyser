@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useAuth, useUser } from '@clerk/clerk-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import './Analysis.css';
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 // Role Card Component with AI-generated details
 const RoleCard = ({ role, index, matchPercentage, isExpanded, onToggle, getRoleDetails, getScoreColor, getScoreGradient, loadingRoleDetails, roleDetailsCache }) => {
@@ -156,6 +159,8 @@ const RoleCard = ({ role, index, matchPercentage, isExpanded, onToggle, getRoleD
 };
 
 const Analysis = ({ data, onBackToHome }) => {
+  const { getToken } = useAuth();
+  const { user } = useUser();
   const [selectedSkillCategory, setSelectedSkillCategory] = useState('all');
   const [animatedScores, setAnimatedScores] = useState({ ats: 0, match: 0 });
   const [isExporting, setIsExporting] = useState(false);
@@ -166,7 +171,7 @@ const Analysis = ({ data, onBackToHome }) => {
   const [saveMessage, setSaveMessage] = useState('');
   const reportRef = useRef(null);
 
-  const savedStorageKey = 'cvlyze_saved_analyses';
+  const savedStorageKey = `cvlyze_saved_analyses_${user?.id || 'anonymous'}`;
 
   // Extract data with defaults
   const {
@@ -243,10 +248,16 @@ const Analysis = ({ data, onBackToHome }) => {
       missingSkills: missing_skills || []
     });
 
+    if (!user?.id) {
+      setSaveMessage('Sign in to save this analysis.');
+      return;
+    }
+
     const entry = {
       id: `${now.getTime()}-${Math.round(Math.random() * 10000)}`,
       fingerprint,
       name: resumeName,
+      userId: user.id,
       savedAt: now.toISOString(),
       summary: summary || '',
       atsScore: ats_score,
@@ -387,10 +398,12 @@ const Analysis = ({ data, onBackToHome }) => {
       // Calculate matched and missing skills for this role
       const userSkills = [...matched_skills, ...top_skills];
       
-      const response = await fetch('http://localhost:5000/api/role-details', {
+      const token = await getToken();
+      const response = await fetch(`${API_BASE_URL}/role-details`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
         body: JSON.stringify({
           roleName: role,
@@ -460,7 +473,7 @@ const Analysis = ({ data, onBackToHome }) => {
         missingRoleSkills: missing_skills.slice(0, 5)
       };
     }
-  }, [matched_skills, missing_skills, top_skills, roleDetailsCache]);
+  }, [matched_skills, missing_skills, top_skills, roleDetailsCache, getToken]);
 
   // Get detailed information for a role (removed hardcoded version)
   const getRoleDetails = useCallback(async (role, matchPercentage) => {

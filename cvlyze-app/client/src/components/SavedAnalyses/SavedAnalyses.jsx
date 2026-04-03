@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
+import { useUser } from '@clerk/clerk-react';
 import './SavedAnalyses.css';
 
 const SavedAnalyses = ({ onBackToHome, onViewAnalysis }) => {
+  const { user } = useUser();
   const [savedAnalyses, setSavedAnalyses] = useState([]);
   const [expandedSavedId, setExpandedSavedId] = useState(null);
 
-  const savedStorageKey = 'cvlyze_saved_analyses';
+  const savedStorageKey = `cvlyze_saved_analyses_${user?.id || 'anonymous'}`;
 
   useEffect(() => {
     try {
@@ -18,7 +20,7 @@ const SavedAnalyses = ({ onBackToHome, onViewAnalysis }) => {
     } catch (error) {
       console.warn('Failed to load saved analyses:', error);
     }
-  }, []);
+  }, [savedStorageKey]);
 
   const formatSavedDate = (value) => {
     const date = new Date(value);

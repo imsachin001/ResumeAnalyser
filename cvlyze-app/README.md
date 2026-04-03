@@ -80,6 +80,8 @@ pip install -r requirements.txt
 - Add your Gemini API key:
 ```
 GEMINI_API_KEY=your_actual_gemini_api_key_here
+CLERK_SECRET_KEY=your_clerk_secret_key_here
+CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key_here
 PORT=5000
 FLASK_ENV=development
 ```

@@ -35,7 +35,7 @@ class ApiService {
    * @param {string} jobDescription - Optional job description text
    * @returns {Promise} Analysis result
    */
-  static async analyzeResume(resumeFile, jobDescription = '') {
+  static async analyzeResume(resumeFile, jobDescription = '', authToken = null) {
     try {
       console.log('API: Starting analysis...', {
         fileName: resumeFile.name,
@@ -52,8 +52,11 @@ class ApiService {
 
       console.log('API: Sending request to:', `${API_BASE_URL}/analyze`);
       
+      const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
+
       const response = await fetch(`${API_BASE_URL}/analyze`, {
         method: 'POST',
+        headers,
         body: formData,
       });
 
