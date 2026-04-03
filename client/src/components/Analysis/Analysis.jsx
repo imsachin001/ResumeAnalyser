@@ -4,7 +4,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import './Analysis.css';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://resumeanalyser-zsnb.onrender.com/api';
 
 // Role Card Component with AI-generated details
 const RoleCard = ({ role, index, matchPercentage, isExpanded, onToggle, getRoleDetails, getScoreColor, getScoreGradient, loadingRoleDetails, roleDetailsCache }) => {

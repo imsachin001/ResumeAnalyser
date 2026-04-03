@@ -12,8 +12,8 @@ const { clerkMiddleware, requireAuth } = require('./middleware/authMiddleware');
 const app = express();
 
 // Middleware
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
-app.use(cors({ origin: corsOrigin, credentials: true }));
+const corsOrigin = process.env.CORS_ORIGIN || 'https://cvlyze-app.vercel.app';
+app.use(cors({ origin: [corsOrigin], credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(clerkMiddleware({ publishableKey: process.env.CLERK_PUBLISHABLE_KEY }));
