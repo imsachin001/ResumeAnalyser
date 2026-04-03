@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Installation Script for Clerk Authentication
-# Run this from the cvlyze-app root directory
+# Run this from the repository root directory
 
 echo -e "\033[0;36mInstalling Clerk Authentication packages...\033[0m"
 echo ""
