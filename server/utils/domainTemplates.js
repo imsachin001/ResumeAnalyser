@@ -367,7 +367,7 @@ function detectDomain(resumeText) {
   }
 
   // Default to software development if no strong match
-  if (!primaryDomain || maxScore < 3) {
+  if (!primaryDomain || maxScore < 1) {
     primaryDomain = {
       key: 'software_development',
       name: domainTemplates.software_development.name,
@@ -384,3 +384,4 @@ module.exports = {
   domainTemplates,
   detectDomain
 };
+

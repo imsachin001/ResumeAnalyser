@@ -1,385 +1,792 @@
 const pdfParse = require('pdf-parse');
-const mammoth = require('mammoth');
-const fs = require('fs').promises;
+const mammoth  = require('mammoth');
+const fs       = require('fs').promises;
 
+/**
+ * EnhancedResumeParser
+ *
+ * FIXES:
+ * - Legacy `sections` map now returns raw arrays/objects (not joined strings) so
+ *   atsCalculator.calculateSectionCompleteness() can correctly assess content.
+ * - extractExperience() now parses real work/internship entries in addition to
+ *   competitive-programming profiles.
+ * - extractProjects() is more robust — avoids swallowing experience entries.
+ * - Location pattern is generalised beyond a hard-coded Indian city list.
+ */
 class EnhancedResumeParser {
   constructor() {
-    // URL patterns
     this.urlPatterns = {
-      email: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
-      phone: /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g,
-      linkedin: /(?:linkedin\.com\/in\/)([\w-]+)/gi,
-      github: /(?:github\.com\/)([\w-]+)/gi,
+      email:     /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
+      phone:     /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g,
+      linkedin:  /(?:linkedin\.com\/in\/)([\w-]+)/gi,
+      github:    /(?:github\.com\/)([\w-]+)/gi,
       portfolio: /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+\.(?:netlify\.app|vercel\.app|herokuapp\.com|web\.app|github\.io|com|in))/gi
     };
   }
 
-  /**
-   * Clean and normalize extracted text
-   */
+  // ─── Text utilities ────────────────────────────────────────────────────────
+
   cleanText(text) {
     if (!text) return '';
-    
     return text
+      .replace(/\r/g, '')
       .replace(/\n\s*\n/g, '\n')
       .replace(/\s{2,}/g, ' ')
       .replace(/\t/g, ' ')
-      .replace(/\r/g, '')
       .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
+      .map(l => l.trim())
+      .filter(l => l.length > 0)
       .join('\n')
       .trim();
   }
 
-  /**
-   * Extract PDF text
-   */
+  // ─── File extraction ───────────────────────────────────────────────────────
+
   async extractTextFromPdf(filePath) {
-    try {
-      const dataBuffer = await fs.readFile(filePath);
-      const data = await pdfParse(dataBuffer);
-      return this.cleanText(data.text);
-    } catch (error) {
-      throw new Error(`Error reading PDF: ${error.message}`);
-    }
+    const data = await pdfParse(await fs.readFile(filePath));
+    return this.cleanText(data.text);
   }
 
-  /**
-   * Extract DOCX text
-   */
   async extractTextFromDocx(filePath) {
-    try {
-      const buffer = await fs.readFile(filePath);
-      const result = await mammoth.extractRawText({ buffer });
-      return this.cleanText(result.value);
-    } catch (error) {
-      throw new Error(`Error reading DOCX: ${error.message}`);
-    }
+    const result = await mammoth.extractRawText({ buffer: await fs.readFile(filePath) });
+    return this.cleanText(result.value);
   }
 
-  /**
-   * Extract text based on file type
-   */
   async extractText(filePath, fileType) {
-    if (fileType === 'pdf') {
-      return await this.extractTextFromPdf(filePath);
-    } else if (fileType === 'docx' || fileType === 'doc') {
-      return await this.extractTextFromDocx(filePath);
-    } else {
-      throw new Error(`Unsupported file type: ${fileType}`);
-    }
+    if (fileType === 'pdf')                     return this.extractTextFromPdf(filePath);
+    if (fileType === 'docx' || fileType === 'doc') return this.extractTextFromDocx(filePath);
+    throw new Error(`Unsupported file type: ${fileType}`);
+  }
+
+  // ─── Section boundary helper ───────────────────────────────────────────────
+
+  /**
+   * Returns the index in `lines` where a given section heading appears,
+   * or -1 if not found.
+   */
+  findSectionIndex(lines, patterns) {
+    return lines.findIndex(l => patterns.some(p => p.test(l.trim())));
   }
 
   /**
-   * 1. Extract Personal/Contact Info
+   * Extracts lines belonging to a section (from sectionIdx+1 until the next
+   * recognised section heading). Works for both title-case and ALL-CAPS headings.
    */
+  extractSectionLines(lines, sectionIdx) {
+    if (sectionIdx === -1) return [];
+    // All common resume section headings — matched case-insensitively and trimmed
+    const nextSectionPatterns = [
+      /^(education|academic background|academic qualifications?)$/i,
+      /^(experience|work experience|professional experience|work history|employment history|employment|career history|positions? held)$/i,
+      /^(projects?|personal projects?|academic projects?|key projects?)$/i,
+      /^(skills?|technical skills?|core competencies|competencies|proficiencies)$/i,
+      /^(certifications?|licenses?|credentials?)$/i,
+      /^(achievements?|awards?|honors?|accomplishments?)$/i,
+      /^(summary|objective|career objective|professional summary|profile|about|about me)$/i,
+      /^(contact|contact information|personal information|personal details)$/i,
+      /^(extracurricular|activities|co-curricular|extra-curricular)$/i,
+      /^(publications?|research|papers?)$/i,
+      /^(languages?|language proficiency)$/i,
+      /^(interests?|hobbies)$/i,
+      /^(volunteering?|volunteer experience|community service)$/i,
+      /^(references?|references available)$/i,
+    ];
+    const rest = lines.slice(sectionIdx + 1);
+    const endOffset = rest.findIndex(l =>
+      nextSectionPatterns.some(p => p.test(l.trim()))
+    );
+    return endOffset === -1 ? rest : rest.slice(0, endOffset);
+  }
+
+  // ─── 1. Contact ────────────────────────────────────────────────────────────
+
   extractContactInfo(text) {
     const lines = text.split('\n');
     const contact = {
-      name: null,
-      email: null,
-      phone: null,
-      location: null,
-      portfolio: null,
-      linkedin: null,
-      github: null
+      name: null, email: null, phone: null,
+      location: null, portfolio: null, linkedin: null, github: null
     };
 
-    // Extract name (first non-empty, non-section-header line)
-    const commonHeaders = ['skills', 'education', 'experience', 'projects', 'summary', 'objective', 'contact'];
+    const commonHeaders = [
+      'skills', 'education', 'experience', 'projects', 'summary',
+      'objective', 'contact', 'profile', 'about', 'achievements'
+    ];
+
+    // Name: first short line in top 8 that isn't a header/email/phone
     for (let i = 0; i < Math.min(8, lines.length); i++) {
       const line = lines[i].trim();
-      if (line && 
-          line.length < 50 && 
-          line.split(/\s+/).length <= 4 &&
-          !commonHeaders.some(h => line.toLowerCase().includes(h)) &&
-          !/[@|:()]/.test(line) &&
-          !/\d{3,}/.test(line)) {
+      if (
+        line &&
+        line.length < 60 &&
+        line.split(/\s+/).length <= 5 &&
+        !commonHeaders.some(h => line.toLowerCase().includes(h)) &&
+        !/@|[:()|]/.test(line) &&
+        !/\d{5,}/.test(line)   // allow short numbers but not long digit runs
+      ) {
         contact.name = line;
         break;
       }
     }
 
-    // Extract email
-    const emailMatch = text.match(this.urlPatterns.email);
-    contact.email = emailMatch ? emailMatch[0] : null;
+    // Email
+    const emailMatch = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/);
+    contact.email    = emailMatch ? emailMatch[0] : null;
 
-    // Extract phone
-    const phoneMatch = text.match(this.urlPatterns.phone);
-    contact.phone = phoneMatch ? phoneMatch[0].replace(/[-.\s()]/g, '') : null;
+    // Phone — handles +91, leading 0, various separators
+    const phoneMatch = text.match(/(?:\+91[-.\s]?|0)?[6-9]\d{9}|(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+    contact.phone    = phoneMatch ? phoneMatch[0].replace(/[-.\s()]/g, '') : null;
 
-    // Extract LinkedIn
-    const linkedinMatch = text.match(this.urlPatterns.linkedin);
-    contact.linkedin = linkedinMatch ? `linkedin.com/in/${linkedinMatch[0].split('/').pop()}` : null;
-
-    // Extract GitHub
-    const githubMatch = text.match(this.urlPatterns.github);
-    contact.github = githubMatch ? `github.com/${githubMatch[0].split('/').pop()}` : null;
-
-    // Extract Portfolio
-    const portfolioMatch = text.match(this.urlPatterns.portfolio);
-    if (portfolioMatch) {
-      contact.portfolio = portfolioMatch[0].startsWith('http') ? portfolioMatch[0] : `https://${portfolioMatch[0]}`;
+    // LinkedIn — full URL OR plain "LinkedIn" text near the header
+    const linkedinUrlMatch = text.match(/linkedin\.com\/in\/([\w-]+)/i);
+    if (linkedinUrlMatch) {
+      contact.linkedin = `linkedin.com/in/${linkedinUrlMatch[1]}`;
+    } else if (/\blinkedin\b/i.test(text.slice(0, 500))) {
+      // Plain label "LinkedIn" in the header area — treat as present
+      contact.linkedin = 'linkedin.com (linked in header)';
     }
 
-    // Extract location (city, state/country)
-    const locationPattern = /(?:Jaipur|Delhi|Mumbai|Bangalore|Hyderabad|Chennai|Pune|Kolkata|Ahmedabad|Rajasthan|Maharashtra|Karnataka|India)/gi;
-    const locationMatch = text.match(locationPattern);
-    contact.location = locationMatch ? locationMatch.slice(0, 2).join(', ') : null;
+    // GitHub — full URL OR plain "GitHub" label
+    const githubUrlMatch = text.match(/github\.com\/([\w-]+)/i);
+    if (githubUrlMatch) {
+      contact.github = `github.com/${githubUrlMatch[1]}`;
+    } else if (/\bgithub\b/i.test(text.slice(0, 500))) {
+      contact.github = 'github.com (linked in header)';
+    }
+
+    // Portfolio — any netlify/vercel/heroku/personal domain that isn't github/linkedin
+    const portfolioMatch = text.match(
+      /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+\.(?:netlify\.app|vercel\.app|herokuapp\.com|web\.app|github\.io))/i
+    );
+    if (portfolioMatch) {
+      contact.portfolio = portfolioMatch[0].startsWith('http')
+        ? portfolioMatch[0] : `https://${portfolioMatch[0]}`;
+    }
+
+    // Location — City/State patterns + major Indian cities
+    const locationPattern = /(?:[A-Z][a-z]+(?:\s[A-Z][a-z]+)*,\s*(?:[A-Z]{2,}|[A-Z][a-z]+))|(?:Jaipur|Delhi|Mumbai|Bangalore|Bengaluru|Hyderabad|Chennai|Pune|Kolkata|Ahmedabad|Surat|Lucknow|Noida|Gurugram|Gurgaon|Indore|Nagaur|Trichy|Tiruchirappalli|New York|San Francisco|London|Berlin|Dubai)/g;
+    const locationMatch   = text.match(locationPattern);
+    contact.location      = locationMatch ? locationMatch[0] : null;
 
     return contact;
   }
 
-  /**
-   * 2. Extract Summary/Objective
-   */
+  // ─── 2. Summary ───────────────────────────────────────────────────────────
+
   extractSummary(text) {
-    const summaryKeywords = ['summary', 'objective', 'career objective', 'about', 'about me', 'profile', 'professional summary'];
+    const summaryKeywords = [
+      'summary', 'objective', 'career objective', 'about', 'about me',
+      'profile', 'professional summary', 'professional profile'
+    ];
     const lines = text.split('\n');
-    
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].toLowerCase();
-      if (summaryKeywords.some(kw => line.includes(kw))) {
-        // Get next 2-4 lines as summary
-        const summaryLines = lines.slice(i + 1, i + 5).filter(l => l.trim().length > 20);
-        if (summaryLines.length > 0) {
-          return summaryLines.join(' ').trim();
-        }
+      if (summaryKeywords.some(kw => lines[i].toLowerCase().trim() === kw ||
+          lines[i].toLowerCase().includes(kw))) {
+        const summaryLines = lines.slice(i + 1, i + 6).filter(l => l.trim().length > 20);
+        if (summaryLines.length > 0) return summaryLines.join(' ').trim();
       }
     }
     return null;
   }
 
-  /**
-   * 3. Extract Education
-   */
+  // ─── 3. Education ─────────────────────────────────────────────────────────
+
   extractEducation(text) {
     const education = [];
-    const lines = text.split('\n');
-    
-    // Find EDUCATION section
-    const eduIndex = lines.findIndex(line => /\b(education|academic)\b/i.test(line));
-    if (eduIndex === -1) return education;
+    const lines     = text.split('\n');
 
-    // Get lines until next section
-    const endIndex = lines.slice(eduIndex + 1).findIndex(line => 
-      /\b(experience|projects|skills|certifications)\b/i.test(line)
-    );
-    const eduLines = lines.slice(eduIndex + 1, endIndex === -1 ? lines.length : eduIndex + 1 + endIndex);
+    const eduIdx = this.findSectionIndex(lines, [
+      /^education$/i,
+      /^academic\s+background$/i,
+      /^educational\s+qualifications?$/i,
+      /^academic\s+qualifications?$/i
+    ]);
+    if (eduIdx === -1) return education;
 
-    // Parse education entries
-    let currentEdu = null;
-    eduLines.forEach(line => {
-      line = line.trim();
+    const eduLines = this.extractSectionLines(lines, eduIdx);
+    let current    = null;
+
+    // Any date format: "Dec 2020 — May 2022", "2020 – 2022", "2016 - Present"
+    const datePattern = /(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?\d{4}\s*[-–—]\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?(?:\d{4}|present|ongoing|current)/i;
+
+    // Degree patterns — covers HCI, Arts, Commerce, Science, Law, etc.
+    const degreePattern = /B\.?Tech|M\.?Tech|B\.?E\.?|M\.?E\.?|Bachelor|Master|Masters|Diploma|B\.?Sc|M\.?Sc|MBA|Ph\.?D|B\.?A\.?|M\.?A\.?|B\.?Com|M\.?Com|LLB|LLM|BBA|BCA|MCA|B\.?Des|M\.?Des|HCI|Human.Computer|Interaction Design|Graphic Design|Fine Arts|Liberal Arts|Psychology|Nursing|Pharmacy|Architecture/i;
+
+    // Institution patterns — broader than before
+    const institutionPattern = /College|University|Institute|School|IIIT|IIT|NIT|Academy|Polytechnic|Pratt|MIT|Stanford|Harvard|Oxford|Campus|Faculty|Department/i;
+
+    eduLines.forEach(rawLine => {
+      const line = rawLine.trim();
       if (!line) return;
 
-      // Detect institute names (usually in caps or Title Case)
-      if (/^[A-Z][A-Z\s]+/.test(line) || /College|University|Institute|School|IIIT|IIT|NIT/.test(line)) {
-        if (currentEdu) education.push(currentEdu);
-        currentEdu = {
-          institute: line,
-          degree: null,
-          duration: null,
-          details: []
-        };
-      }
-      // Detect degree
-      else if (currentEdu && /B\.?Tech|M\.?Tech|B\.?E\.?|M\.?E\.?|Bachelor|Master|Diploma|Computer Science|Engineering/.test(line)) {
-        currentEdu.degree = line;
-      }
-      // Detect duration (year ranges)
-      else if (currentEdu && /20\d{2}[\s–-]+20\d{2}|20\d{2}/.test(line)) {
-        currentEdu.duration = line.match(/20\d{2}[\s–-]+20\d{2}|20\d{2}/)[0];
-      }
-      // Other details
-      else if (currentEdu) {
-        currentEdu.details.push(line);
+      const isDate   = datePattern.test(line);
+      const isDegree = degreePattern.test(line);
+      const isInst   = institutionPattern.test(line) || /^[A-Z][A-Z\s]{4,}$/.test(line);
+
+      if (isInst && !isDate && !isDegree) {
+        if (current) education.push(current);
+        current = { institute: line, degree: null, duration: null, cgpa: null, details: [] };
+      } else if (isDegree && !isDate) {
+        // Could be a new entry if we haven't started one, or belong to current
+        if (!current) current = { institute: null, degree: line, duration: null, cgpa: null, details: [] };
+        else current.degree = line;
+      } else if (isDate) {
+        if (!current) current = { institute: null, degree: null, duration: null, cgpa: null, details: [] };
+        current.duration = line.match(datePattern)[0];
+      } else if (current && /cgpa|gpa|percentage|%|grade/i.test(line)) {
+        current.cgpa = line;
+      } else if (current) {
+        // Check if this line starts a combined degree+institution line e.g. "Masters Degree in HCI, Pratt Institute"
+        if (isDegree && isInst) {
+          if (current && (current.degree || current.institute)) education.push(current);
+          current = { institute: line, degree: line, duration: null, cgpa: null, details: [] };
+        } else {
+          current.details.push(line);
+        }
       }
     });
 
-    if (currentEdu) education.push(currentEdu);
+    if (current && (current.institute || current.degree)) education.push(current);
     return education;
   }
 
+  // ─── 4. Skills ────────────────────────────────────────────────────────────
+
   /**
-   * 4. Extract Skills (Categorized)
+   * Universal skill extractor.
+   * Returns a `categories` object whose keys depend on the detected domain.
+   * Tech resumes get languages/frameworks/etc.
+   * Non-tech resumes get domain-appropriate buckets (tools, soft_skills, domain_skills, etc.)
+   * All resumes also get a flat `all` array for easy downstream use.
    */
-  extractSkillsCategorized(text) {
+  extractSkillsCategorized(text, detectedDomainKey = null) {
+    // ── Always-present universal categories ──────────────────────────────
     const skills = {
-      languages: [],
-      frameworks: [],
-      databases: [],
-      tools: [],
-      ai_ml: [],
-      cloud: [],
-      other: []
+      // Tech (populated only when relevant)
+      languages:    [],
+      frameworks:   [],
+      databases:    [],
+      tools:        [],        // software/platform tools (universal)
+      ai_ml:        [],
+      cloud:        [],
+      // Non-tech domain skills (populated by domain-specific maps below)
+      domain_skills: [],       // e.g. SEO, Payroll, Patient Care
+      soft_skills:   [],       // Communication, Leadership, etc.
+      certifications_found: [], // any cert-like tokens found in skills text
+      other:        []
     };
 
-    // Skill definitions with synonyms
-    const skillMap = {
+    // ── Universal soft-skill patterns (apply to ALL domains) ─────────────
+    const softSkillMap = {
+      'Communication':       ['communication', 'verbal communication', 'written communication'],
+      'Leadership':          ['leadership', 'team lead', 'leading teams'],
+      'Teamwork':            ['teamwork', 'team player', 'collaboration', 'collaborative'],
+      'Problem Solving':     ['problem.solving', 'problem solver', 'analytical thinking', 'critical thinking'],
+      'Time Management':     ['time management', 'deadline', 'multitasking'],
+      'Presentation Skills': ['presentation', 'public speaking', 'pitching'],
+      'Negotiation':         ['negotiation', 'negotiating'],
+      'Conflict Resolution': ['conflict resolution', 'mediation'],
+      'Adaptability':        ['adaptable', 'adaptability', 'flexibility', 'flexible'],
+      'Attention to Detail': ['attention to detail', 'detail.oriented'],
+      'Empathy':             ['empathy', 'empathetic'],
+      'Customer Service':    ['customer service', 'customer satisfaction', 'client handling'],
+      'Project Management':  ['project management', 'project planning', 'project coordination'],
+      'Research':            ['research', 'market research', 'data research'],
+      'Microsoft Office':    ['ms office', 'microsoft office', 'word', 'excel', 'powerpoint', 'outlook'],
+      'Google Workspace':    ['google workspace', 'google docs', 'google sheets', 'google slides', 'gsuite'],
+    };
+
+    // ── Domain-specific skill maps ────────────────────────────────────────
+    const domainSkillMaps = {
+
+      marketing: {
+        'SEO':                   ['seo', 'search engine optimization'],
+        'SEM':                   ['sem', 'search engine marketing'],
+        'Google Ads':            ['google ads', 'google adwords'],
+        'Facebook Ads':          ['facebook ads', 'meta ads', 'instagram ads'],
+        'Content Marketing':     ['content marketing', 'content strategy'],
+        'Email Marketing':       ['email marketing', 'mailchimp', 'klaviyo', 'sendgrid'],
+        'Social Media Marketing':['social media', 'social media marketing', 'smm'],
+        'Copywriting':           ['copywriting', 'copy writing'],
+        'Google Analytics':      ['google analytics', 'ga4'],
+        'HubSpot':               ['hubspot'],
+        'Marketing Automation':  ['marketing automation', 'drip campaigns'],
+        'CRM':                   ['crm', 'salesforce', 'zoho crm'],
+        'Brand Management':      ['branding', 'brand management', 'brand strategy'],
+        'PPC':                   ['ppc', 'pay.per.click', 'paid ads'],
+        'A/B Testing':           ['a/b testing', 'split testing'],
+        'Tableau':               ['tableau'],
+        'Power BI':              ['power bi', 'powerbi'],
+        'Canva':                 ['canva'],
+        'WordPress':             ['wordpress'],
+      },
+
+      sales: {
+        'Lead Generation':       ['lead generation', 'prospecting', 'cold calling'],
+        'CRM':                   ['crm', 'salesforce', 'zoho crm', 'pipedrive'],
+        'B2B Sales':             ['b2b', 'b2b sales'],
+        'B2C Sales':             ['b2c', 'b2c sales'],
+        'Negotiation':           ['negotiation', 'deal closing', 'closing deals'],
+        'Account Management':    ['account management', 'key account'],
+        'Sales Strategy':        ['sales strategy', 'go-to-market'],
+        'Revenue Targets':       ['revenue target', 'quota', 'sales target'],
+        'Upselling':             ['upselling', 'cross-selling', 'cross selling'],
+        'Pipeline Management':   ['pipeline', 'sales pipeline'],
+        'Presentation Skills':   ['presentation', 'pitch', 'demo'],
+        'Customer Retention':    ['retention', 'churn reduction'],
+      },
+
+      human_resources: {
+        'Recruitment':           ['recruitment', 'hiring', 'talent acquisition'],
+        'Onboarding':            ['onboarding', 'induction'],
+        'Payroll':               ['payroll', 'payroll processing'],
+        'HRIS':                  ['hris', 'hrms', 'workday', 'sap hr', 'bamboohr', 'greythr'],
+        'Employee Relations':    ['employee relations', 'er management'],
+        'Performance Management':['performance management', 'appraisal', 'kpi'],
+        'Compliance':            ['compliance', 'labour law', 'labor law', 'statutory compliance'],
+        'Training & Development':['training', 'learning and development', 'l&d'],
+        'Job Portals':           ['naukri', 'linkedin recruiter', 'indeed', 'monster'],
+        'Compensation & Benefits':['compensation', 'benefits', 'c&b', 'ctc'],
+        'Workforce Planning':    ['workforce planning', 'headcount planning'],
+        'Exit Management':       ['exit interview', 'offboarding', 'attrition'],
+      },
+
+      finance: {
+        'Financial Analysis':    ['financial analysis', 'financial modelling', 'financial modeling'],
+        'Accounting':            ['accounting', 'bookkeeping'],
+        'Tally':                 ['tally', 'tally erp'],
+        'SAP FICO':              ['sap fico', 'sap fi', 'sap co'],
+        'QuickBooks':            ['quickbooks', 'quick books'],
+        'MS Excel (Advanced)':   ['vlookup', 'pivot table', 'advanced excel', 'excel macros'],
+        'Auditing':              ['auditing', 'internal audit', 'statutory audit'],
+        'Taxation':              ['taxation', 'income tax', 'gst', 'tds', 'vat'],
+        'Budgeting':             ['budgeting', 'budget planning', 'cost control'],
+        'Financial Reporting':   ['financial reporting', 'mis report', 'balance sheet', 'p&l'],
+        'GAAP':                  ['gaap', 'ind as', 'ifrs'],
+        'Reconciliation':        ['reconciliation', 'bank reconciliation'],
+        'Accounts Payable':      ['accounts payable', 'ap'],
+        'Accounts Receivable':   ['accounts receivable', 'ar'],
+        'CPA':                   ['cpa', 'ca', 'cfa', 'acca', 'cma'],
+      },
+
+      healthcare: {
+        'Patient Care':          ['patient care', 'bedside manner', 'patient management'],
+        'EMR/EHR':               ['emr', 'ehr', 'electronic health record', 'epic', 'cerner', 'meditech'],
+        'HIPAA':                 ['hipaa', 'healthcare compliance'],
+        'Clinical Skills':       ['clinical', 'clinical assessment', 'clinical care'],
+        'Medical Terminology':   ['medical terminology', 'icd', 'cpt codes'],
+        'Nursing':               ['nursing', 'rn', 'lpn', 'bsc nursing'],
+        'Phlebotomy':            ['phlebotomy', 'venipuncture'],
+        'Vital Signs':           ['vital signs', 'bp monitoring', 'pulse oximetry'],
+        'Medication Management': ['medication administration', 'pharmacy', 'drug management'],
+        'First Aid / CPR':       ['first aid', 'cpr', 'bls', 'acls'],
+        'Healthcare Administration':['healthcare administration', 'hospital administration'],
+        'Telemedicine':          ['telemedicine', 'telehealth'],
+      },
+
+      education: {
+        'Curriculum Development':['curriculum', 'curriculum design', 'course development'],
+        'Lesson Planning':       ['lesson plan', 'lesson planning'],
+        'Classroom Management':  ['classroom management', 'student discipline'],
+        'E-Learning':            ['e-learning', 'elearning', 'lms', 'moodle', 'canvas'],
+        'Student Assessment':    ['assessment', 'grading', 'evaluation'],
+        'Instructional Design':  ['instructional design', 'id', 'learning design'],
+        'Special Education':     ['special education', 'sen', 'inclusive education'],
+        'CBSE / ICSE':           ['cbse', 'icse', 'state board'],
+        'Tutoring':              ['tutoring', 'one-on-one teaching', 'private tuition'],
+        'Zoom / Google Meet':    ['zoom', 'google meet', 'online teaching', 'virtual classroom'],
+        'Content Development':   ['content development', 'study material', 'teaching material'],
+      },
+
+      logistics: {
+        'Inventory Management':  ['inventory management', 'stock management', 'inventory control'],
+        'WMS':                   ['wms', 'warehouse management system', 'sap wm', 'oracle wms'],
+        'ERP':                   ['erp', 'sap', 'oracle erp', 'navision'],
+        'Forklift':              ['forklift', 'forklift operator', 'reach truck'],
+        'Supply Chain':          ['supply chain', 'scm', 'supply chain management'],
+        'Procurement':           ['procurement', 'purchasing', 'vendor management'],
+        'Freight / Shipping':    ['freight', 'shipping', 'logistics', 'dispatch'],
+        'Quality Control':       ['quality control', 'qc', 'quality assurance', 'inspection'],
+        'OSHA / Safety':         ['osha', 'safety compliance', 'workplace safety'],
+        'Last Mile Delivery':    ['last mile', 'last-mile delivery', 'delivery management'],
+        'Import / Export':       ['import', 'export', 'customs clearance', 'incoterms'],
+      },
+
+      customer_service: {
+        'Ticketing Systems':     ['zendesk', 'freshdesk', 'servicenow', 'jira service'],
+        'CRM':                   ['crm', 'salesforce', 'hubspot'],
+        'Live Chat':             ['live chat', 'intercom', 'drift', 'chat support'],
+        'Call Centre':           ['call centre', 'call center', 'inbound calls', 'outbound calls'],
+        'Complaint Handling':    ['complaint handling', 'escalation management', 'dispute resolution'],
+        'SLA Management':        ['sla', 'service level agreement'],
+        'CSAT / NPS':            ['csat', 'nps', 'customer satisfaction score'],
+        'Product Knowledge':     ['product knowledge', 'product training'],
+        'Upselling':             ['upselling', 'cross-selling'],
+        'Multilingual':          ['bilingual', 'multilingual', 'hindi', 'english', 'regional language'],
+      },
+
+      project_management: {
+        'Agile':                 ['agile', 'scrum', 'kanban', 'sprint'],
+        'PMP':                   ['pmp', 'prince2', 'capm'],
+        'Jira':                  ['jira', 'confluence'],
+        'Asana':                 ['asana'],
+        'Trello':                ['trello'],
+        'MS Project':            ['ms project', 'microsoft project'],
+        'Risk Management':       ['risk management', 'risk assessment', 'risk mitigation'],
+        'Stakeholder Management':['stakeholder management', 'stakeholder communication'],
+        'Budget Management':     ['budget management', 'cost tracking', 'cost management'],
+        'Resource Planning':     ['resource planning', 'capacity planning'],
+        'Change Management':     ['change management', 'change control'],
+        'Reporting':             ['status report', 'progress report', 'dashboard reporting'],
+      },
+
+      content_writing: {
+        'SEO Writing':           ['seo writing', 'seo content', 'keyword research'],
+        'Copywriting':           ['copywriting', 'ad copy', 'sales copy'],
+        'Technical Writing':     ['technical writing', 'documentation', 'api docs', 'user manual'],
+        'Editing / Proofreading':['editing', 'proofreading', 'copy editing'],
+        'WordPress':             ['wordpress', 'cms'],
+        'Content Strategy':      ['content strategy', 'editorial calendar', 'content planning'],
+        'Blogging':              ['blogging', 'blog writing', 'article writing'],
+        'Storytelling':          ['storytelling', 'narrative'],
+        'Grammarly':             ['grammarly'],
+        'AP / Chicago Style':    ['ap style', 'chicago style', 'style guide'],
+        'Social Media Content':  ['social media content', 'caption writing', 'thread writing'],
+        'Script Writing':        ['script writing', 'video script', 'podcast script'],
+      },
+
+      design: {
+        'Figma':                 ['figma'],
+        'Adobe XD':              ['adobe xd', 'xd'],
+        'Sketch':                ['sketch'],
+        'Photoshop':             ['photoshop', 'adobe photoshop'],
+        'Illustrator':           ['illustrator', 'adobe illustrator'],
+        'InDesign':              ['indesign', 'adobe indesign'],
+        'After Effects':         ['after effects', 'adobe after effects'],
+        'Prototyping':           ['prototyping', 'wireframing', 'wireframe'],
+        'UI Design':             ['ui design', 'user interface design'],
+        'UX Research':           ['ux research', 'user research', 'usability testing'],
+        'Design Systems':        ['design system', 'design tokens'],
+        'Typography':            ['typography', 'typeface'],
+        'Branding':              ['branding', 'brand identity', 'visual identity'],
+        'Canva':                 ['canva'],
+        'Motion Design':         ['motion design', 'animation', 'lottie'],
+        'Accessibility':         ['accessibility', 'wcag', 'a11y'],
+      },
+
+      cybersecurity: {
+        'Penetration Testing':   ['penetration testing', 'pen testing', 'pentest'],
+        'SIEM':                  ['siem', 'splunk', 'qradar', 'elastic siem'],
+        'Vulnerability Assessment':['vulnerability assessment', 'va', 'nessus', 'qualys'],
+        'Incident Response':     ['incident response', 'ir', 'forensics'],
+        'Firewalls / IDS':       ['firewall', 'ids', 'ips', 'palo alto', 'cisco asa'],
+        'Compliance':            ['iso 27001', 'soc 2', 'pci dss', 'gdpr', 'hipaa'],
+        'CISSP / CEH':           ['cissp', 'ceh', 'oscp', 'security+', 'ejpt'],
+        'Network Security':      ['network security', 'vpn', 'zero trust'],
+        'Threat Intelligence':   ['threat intelligence', 'cti', 'mitre att&ck'],
+        'Cloud Security':        ['cloud security', 'aws security', 'azure security'],
+        'Scripting':             ['bash scripting', 'python scripting', 'powershell'],
+        'SOC':                   ['soc', 'security operations center', 'soc analyst'],
+      },
+
+      qa_testing: {
+        'Manual Testing':        ['manual testing', 'test cases', 'test execution'],
+        'Selenium':              ['selenium', 'selenium webdriver'],
+        'Cypress':               ['cypress'],
+        'Postman':               ['postman', 'api testing'],
+        'JMeter':                ['jmeter', 'load testing', 'performance testing'],
+        'Jira':                  ['jira', 'bug tracking', 'defect management'],
+        'TestNG / JUnit':        ['testng', 'junit', 'nunit'],
+        'Agile / Scrum':         ['agile', 'scrum', 'sprint testing'],
+        'Regression Testing':    ['regression testing', 'regression suite'],
+        'ISTQB':                 ['istqb', 'ctfl'],
+        'SQL (for testing)':     ['sql', 'database testing'],
+        'Appium':                ['appium', 'mobile testing'],
+      },
+
+      data_science: {
+        'Python':                ['python'],
+        'R':                     ['\\br\\b', 'r programming', 'r studio'],
+        'SQL':                   ['sql'],
+        'Machine Learning':      ['machine learning', 'ml', 'supervised learning', 'unsupervised learning'],
+        'Deep Learning':         ['deep learning', 'neural network', 'cnn', 'rnn', 'transformer'],
+        'Pandas / NumPy':        ['pandas', 'numpy'],
+        'Scikit-learn':          ['scikit.learn', 'sklearn'],
+        'TensorFlow / PyTorch':  ['tensorflow', 'pytorch'],
+        'Data Visualization':    ['tableau', 'power bi', 'matplotlib', 'seaborn', 'plotly'],
+        'Big Data':              ['spark', 'hadoop', 'hive', 'kafka'],
+        'Statistics':            ['statistics', 'hypothesis testing', 'regression', 'probability'],
+        'NLP':                   ['nlp', 'natural language processing', 'spacy', 'nltk'],
+        'Feature Engineering':   ['feature engineering', 'feature selection'],
+        'Model Deployment':      ['mlflow', 'model deployment', 'flask api', 'fastapi'],
+      },
+
+      software_development: {
+        // Covered by the tech section below — just reference the same map
+      }
+    };
+
+    // ── Tech skill map (used for tech domains + always scanned) ──────────
+    const techSkillMap = {
       languages: {
-        'C++': ['c++', 'cpp'],
-        'C': ['\\bc\\b'],
-        'Python': ['python'],
+        'C++':        ['c\\+\\+', 'cpp'],
+        'C':          ['\\bc\\b'],
+        'Python':     ['python'],
         'JavaScript': ['javascript', 'js', 'ecmascript'],
         'TypeScript': ['typescript', 'ts'],
-        'Java': ['\\bjava\\b'],
-        'SQL': ['sql', 'mysql', 'postgresql']
+        'Java':       ['\\bjava\\b'],
+        'SQL':        ['sql'],
+        'Go':         ['\\bgo\\b', 'golang'],
+        'Rust':       ['\\brust\\b'],
+        'PHP':        ['\\bphp\\b'],
+        'Ruby':       ['\\bruby\\b'],
+        'Swift':      ['\\bswift\\b'],
+        'Kotlin':     ['kotlin'],
       },
       frameworks: {
-        'React': ['react', 'reactjs', 'react js', 'react.js'],
-        'Node.js': ['node', 'nodejs', 'node js', 'node.js'],
-        'Express': ['express', 'expressjs', 'express js', 'express.js'],
-        'Django': ['django'],
-        'Flask': ['flask'],
-        'Next.js': ['next', 'nextjs', 'next.js'],
-        'Vue': ['vue', 'vuejs', 'vue.js'],
-        'Angular': ['angular']
+        'React':       ['react(?:\\.js)?', 'reactjs'],
+        'Node.js':     ['node(?:\\.js)?', 'nodejs'],
+        'Express':     ['express(?:\\.js)?', 'expressjs'],
+        'Django':      ['django'],
+        'Flask':       ['flask'],
+        'FastAPI':     ['fastapi'],
+        'Next.js':     ['next(?:\\.js)?', 'nextjs'],
+        'Vue':         ['vue(?:\\.js)?', 'vuejs'],
+        'Angular':     ['angular(?:js)?'],
+        'Spring Boot': ['spring\\s*boot', 'springboot'],
+        'Laravel':     ['laravel'],
+        'Rails':       ['rails', 'ruby on rails'],
       },
       databases: {
-        'MongoDB': ['mongo', 'mongodb', 'mongo db'],
-        'MySQL': ['mysql'],
-        'PostgreSQL': ['postgres', 'postgresql'],
-        'Redis': ['redis'],
-        'Firebase': ['firebase']
+        'MongoDB':    ['mongo(?:db)?'],
+        'MySQL':      ['mysql'],
+        'PostgreSQL': ['postgres(?:ql)?'],
+        'Redis':      ['redis'],
+        'Firebase':   ['firebase'],
+        'SQLite':     ['sqlite'],
+        'DynamoDB':   ['dynamodb'],
       },
       tools: {
-        'Git': ['\\bgit\\b'],
-        'GitHub': ['github'],
-        'Docker': ['docker'],
-        'VS Code': ['vscode', 'vs code', 'visual studio code'],
-        'Postman': ['postman']
+        'Git':          ['\\bgit\\b'],
+        'GitHub':       ['github'],
+        'Docker':       ['docker'],
+        'Kubernetes':   ['kubernetes', 'k8s'],
+        'VS Code':      ['vscode', 'vs code', 'visual studio code'],
+        'Postman':      ['postman'],
+        'Jira':         ['jira'],
+        'Jenkins':      ['jenkins'],
+        'Linux':        ['linux', 'ubuntu', 'debian'],
+        'Webpack':      ['webpack'],
       },
       ai_ml: {
-        'LangChain': ['langchain'],
-        'Huggingface': ['huggingface', 'hugging face'],
-        'TensorFlow': ['tensorflow'],
-        'PyTorch': ['pytorch'],
-        'Pandas': ['pandas'],
-        'NumPy': ['numpy'],
-        'Machine Learning': ['machine learning', 'ml']
+        'LangChain':        ['langchain'],
+        'Huggingface':      ['huggingface', 'hugging face'],
+        'TensorFlow':       ['tensorflow'],
+        'PyTorch':          ['pytorch'],
+        'Pandas':           ['pandas'],
+        'NumPy':            ['numpy'],
+        'Machine Learning': ['machine learning', '\\bml\\b'],
+        'Deep Learning':    ['deep learning', '\\bdl\\b'],
+        'Scikit-learn':     ['scikit.learn', 'sklearn'],
+        'OpenAI':           ['openai'],
       },
       cloud: {
-        'AWS': ['aws', 'amazon web services'],
-        'Azure': ['azure', 'microsoft azure'],
-        'GCP': ['gcp', 'google cloud']
+        'AWS':    ['aws', 'amazon web services'],
+        'Azure':  ['azure', 'microsoft azure'],
+        'GCP':    ['gcp', 'google cloud'],
+        'Heroku': ['heroku'],
+        'Vercel': ['vercel'],
       },
       other: {
-        'DSA': ['dsa', 'data structures', 'algorithms'],
-        'REST API': ['rest', 'restful', 'rest api', 'api'],
-        'HTML': ['html', 'html5'],
-        'CSS': ['css', 'css3'],
-        'Tailwind': ['tailwind', 'tailwindcss'],
-        'Recharts': ['recharts']
+        'DSA':        ['dsa', 'data structures?', 'algorithms?'],
+        'REST API':   ['rest(?:ful)?(?:\\s*api)?'],
+        'GraphQL':    ['graphql'],
+        'HTML':       ['html5?'],
+        'CSS':        ['css3?'],
+        'Tailwind':   ['tailwind(?:css)?'],
+        'Bootstrap':  ['bootstrap'],
+        'Redux':      ['redux'],
+        'Sass':       ['sass', 'scss'],
+        'OOP':        ['oop', 'object.oriented'],
+        'Microservices': ['microservices?'],
+        'System Design': ['system design'],
       }
     };
 
-    const textLower = text.toLowerCase();
-
-    // Helper function to escape regex special characters
-    const escapeRegex = (str) => {
-      return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    };
-
-    // Match skills
-    for (const [category, skillList] of Object.entries(skillMap)) {
-      for (const [skillName, synonyms] of Object.entries(skillList)) {
-        for (const synonym of synonyms) {
-          const escapedSynonym = escapeRegex(synonym);
-          const pattern = new RegExp(`\\b${escapedSynonym}\\b`, 'i');
-          if (pattern.test(textLower)) {
-            if (!skills[category].includes(skillName)) {
-              skills[category].push(skillName);
+    const matchPatterns = (map) => {
+      const results = [];
+      for (const [skillName, patterns] of Object.entries(map)) {
+        for (const pattern of patterns) {
+          try {
+            if (new RegExp(`\\b${pattern}\\b`, 'i').test(text)) {
+              results.push(skillName);
+              break;
             }
-            break;
-          }
+          } catch (e) { /* invalid regex pattern — skip */ }
         }
       }
+      return results;
+    };
+
+    // ── 1. Always scan tech skills ─────────────────────────────────────────
+    for (const [category, skillList] of Object.entries(techSkillMap)) {
+      skills[category] = matchPatterns(skillList);
     }
+
+    // ── 2. Soft skills (universal) ────────────────────────────────────────
+    skills.soft_skills = matchPatterns(softSkillMap);
+
+    // ── 3. Domain-specific skills ─────────────────────────────────────────
+    // Use the detected domain key if provided, else scan ALL non-tech domain maps
+    // so we never miss skills for ambiguous resumes
+    const techDomains = new Set(['software_development', 'data_science', 'cybersecurity', 'qa_testing']);
+    const isTechDomain = detectedDomainKey && techDomains.has(detectedDomainKey);
+
+    if (detectedDomainKey && domainSkillMaps[detectedDomainKey]) {
+      // Targeted: only scan the detected domain's map
+      skills.domain_skills = matchPatterns(domainSkillMaps[detectedDomainKey]);
+    } else if (!isTechDomain) {
+      // Fallback: scan all non-tech domain maps and collect everything found
+      const allDomainSkills = new Set();
+      for (const [, domainMap] of Object.entries(domainSkillMaps)) {
+        if (Object.keys(domainMap).length === 0) continue;
+        matchPatterns(domainMap).forEach(s => allDomainSkills.add(s));
+      }
+      skills.domain_skills = Array.from(allDomainSkills);
+    }
+
+    // ── 4. Flatten all to a single list (deduped) ─────────────────────────
+    const allSkillsSet = new Set([
+      ...skills.languages,
+      ...skills.frameworks,
+      ...skills.databases,
+      ...skills.tools,
+      ...skills.ai_ml,
+      ...skills.cloud,
+      ...skills.other,
+      ...skills.domain_skills,
+      ...skills.soft_skills
+    ]);
+    skills.all = Array.from(allSkillsSet);
 
     return skills;
   }
 
-  /**
-   * 5. Extract Projects
-   */
+  // ─── 5. Projects ──────────────────────────────────────────────────────────
+
   extractProjects(text) {
     const projects = [];
-    const lines = text.split('\n');
-    
-    // Find PROJECTS/EXPERIENCE section
-    const projectIndex = lines.findIndex(line => /\b(projects?|experience)\b/i.test(line));
-    if (projectIndex === -1) return projects;
+    const lines    = text.split('\n');
 
-    // Get lines until next section
-    const endIndex = lines.slice(projectIndex + 1).findIndex(line => 
-      /\b(education|skills|certifications)\b/i.test(line)
-    );
-    const projectLines = lines.slice(projectIndex + 1, endIndex === -1 ? lines.length : projectIndex + 1 + endIndex);
+    const projIdx = this.findSectionIndex(lines, [/^projects?$/i, /^personal projects?$/i, /^academic projects?$/i]);
+    if (projIdx === -1) return projects;
 
-    let currentProject = null;
-    projectLines.forEach(line => {
-      line = line.trim();
+    const projLines = this.extractSectionLines(lines, projIdx);
+    let current     = null;
+
+    projLines.forEach(rawLine => {
+      const line = rawLine.trim();
       if (!line) return;
 
-      // Detect project title (often has technical terms or capitalized)
-      if (/AI|Clone|App|System|Platform|Tool|Website|Dashboard/.test(line) || /^[A-Z]/.test(line)) {
-        if (currentProject && currentProject.description) {
-          projects.push(currentProject);
+      // Project title: usually short (<80 chars), starts with capital, NOT a bullet
+      const isBullet = /^[•\-\*]/.test(line);
+      const isTitle  = !isBullet && line.length < 80 && /^[A-Z]/.test(line) &&
+                       !/^(react|node|python|mongo|express|built|developed|created|implemented)/i.test(line);
+
+      if (isTitle) {
+        if (current && (current.description.length > 0 || current.tech_stack.length > 0)) {
+          projects.push(current);
         }
-        currentProject = {
-          name: line,
-          tech_stack: [],
-          description: [],
-          status: null,
-          link: null
-        };
-      }
-      // Detect tech stack (contains multiple tech words with |, commas, or in brackets)
-      else if (currentProject && (/React|Node|Mongo|Python|Express|Tailwind|JavaScript/.test(line) || /\||,/.test(line))) {
-        const techs = line.split(/[|,]/).map(t => t.trim()).filter(t => t.length > 1);
-        currentProject.tech_stack.push(...techs);
-      }
-      // Detect status
-      else if (currentProject && /(In Progress|Completed|Ongoing)/i.test(line)) {
-        currentProject.status = line;
-      }
-      // Detect link
-      else if (currentProject && /https?:\/\//.test(line)) {
-        currentProject.link = line.match(/https?:\/\/[^\s]+/)[0];
-      }
-      // Description
-      else if (currentProject) {
-        currentProject.description.push(line);
+        current = { name: line, tech_stack: [], description: [], status: null, link: null };
+      } else if (current && /https?:\/\//.test(line)) {
+        current.link = line.match(/https?:\/\/[^\s]+/)[0];
+      } else if (current && /(in progress|completed|ongoing)/i.test(line)) {
+        current.status = line;
+      } else if (current && (/[|,]/.test(line) && line.split(/[|,]/).length >= 2)) {
+        // Likely a tech-stack line
+        current.tech_stack.push(...line.split(/[|,]/).map(t => t.trim()).filter(t => t.length > 1));
+      } else if (current) {
+        current.description.push(isBullet ? line.replace(/^[•\-\*]\s*/, '') : line);
       }
     });
 
-    if (currentProject && currentProject.description.length > 0) {
-      projects.push(currentProject);
+    if (current && (current.description.length > 0 || current.tech_stack.length > 0)) {
+      projects.push(current);
     }
 
-    // Format projects
-    return projects.map(p => ({
-      ...p,
-      description: p.description.join(' ').trim()
-    }));
+    return projects.map(p => ({ ...p, description: p.description.join(' ').trim() }));
   }
 
+  // ─── 6. Experience ────────────────────────────────────────────────────────
+
   /**
-   * 6. Extract Experience/Achievements
+   * Extracts BOTH real work/internship experience AND competitive-programming
+   * achievements. The original code only handled the latter.
    */
   extractExperience(text) {
     const experience = [];
-    
-    // Look for competitive programming achievements
+    const lines      = text.split('\n');
+
+    // ── A. Real work / internship experience ──────────────────────────────
+    const expIdx = this.findSectionIndex(lines, [
+      /^(work\s+)?experience$/i,
+      /^professional\s+experience$/i,
+      /^work\s+history$/i,
+      /^employment(\s+history)?$/i,
+      /^e\s*m\s*p\s*l\s*o\s*y\s*m\s*e\s*n\s*t/i,  // spaced letters like "E M P L O Y M E N T"
+      /^internships?$/i,
+      /^career(\s+history)?$/i,
+      /^positions?\s+held$/i,
+    ]);
+
+    if (expIdx !== -1) {
+      const expLines = this.extractSectionLines(lines, expIdx);
+      let current    = null;
+
+      // Matches: "Oct 2024 — Present", "Feb 2022 – Sep 2024", "2020 - 2022"
+      const durationPattern = /(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?\d{4}\s*[-–—]\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?(?:\d{4}|present|ongoing|current)/i;
+
+      // Role keywords — broad enough to catch most titles
+      const roleKeywords = /intern|developer|engineer|analyst|designer|manager|lead|consultant|associate|coordinator|specialist|executive|director|officer|architect|researcher|scientist|writer|editor|teacher|nurse|doctor|accountant|advisor|strategist|assistant|representative|head of|vp |cto|ceo|cmo|cfo/i;
+
+      expLines.forEach(rawLine => {
+        const line = rawLine.trim();
+        if (!line) return;
+
+        const hasDate = durationPattern.test(line);
+        const hasRole = roleKeywords.test(line);
+
+        // Many PDFs combine date + role on one line e.g. "Oct 2024 — Present UX Designer, Real Vision Group"
+        if (hasDate && hasRole && line.length < 200) {
+          if (current && current.role) experience.push(current);
+          const dateMatch = line.match(durationPattern)[0];
+          const roleText  = line.replace(durationPattern, '').replace(/^[\s,\-–—]+/, '').trim();
+          current = { role: roleText || line, company: null, duration: dateMatch, description: [], type: 'professional' };
+        } else if (hasDate && current) {
+          current.duration = line.match(durationPattern)[0];
+        } else if (hasRole && line.length < 150) {
+          if (current && current.role) experience.push(current);
+          current = { role: line, company: null, duration: null, description: [], type: 'professional' };
+        } else if (current && !current.company && line.length < 100 &&
+                   /^[A-Z]/.test(line) && !durationPattern.test(line) &&
+                   !/^[•\-\*]/.test(line)) {
+          current.company = line;
+        } else if (current) {
+          current.description.push(line.replace(/^[•\-\*]\s*/, ''));
+        }
+      });
+
+      if (current && current.role) experience.push(current);
+    }
+
+    // ── B. Competitive programming achievements ───────────────────────────
     const leetcodeMatch = text.match(/LeetCode\s*(Knight|Guardian|Master)?\s*\(?(\d+)\)?/i);
     if (leetcodeMatch) {
       experience.push({
         role: `LeetCode ${leetcodeMatch[1] || 'User'}`,
         platform: 'LeetCode',
         rating: leetcodeMatch[2],
-        description: `Solved 500+ problems; Rating: ${leetcodeMatch[2]}`
+        description: `Solved 500+ problems; Rating: ${leetcodeMatch[2]}`,
+        type: 'competitive'
       });
     }
 
@@ -389,7 +796,8 @@ class EnhancedResumeParser {
         role: `${codechefMatch[1]}★ Coder`,
         platform: 'CodeChef',
         rating: codechefMatch[2],
-        description: `Competitive programmer with ${codechefMatch[1]} star rating`
+        description: `Competitive programmer with ${codechefMatch[1]} star rating`,
+        type: 'competitive'
       });
     }
 
@@ -399,41 +807,80 @@ class EnhancedResumeParser {
         role: 'Competitive Programmer',
         platform: 'Codeforces',
         rating: codeforcesMatch[1],
-        description: `Active on Codeforces with rating ${codeforcesMatch[1]}`
+        description: `Active on Codeforces with rating ${codeforcesMatch[1]}`,
+        type: 'competitive'
       });
     }
 
     return experience;
   }
 
-  /**
-   * Main parsing function
-   */
+  // ─── 7. Certifications ────────────────────────────────────────────────────
+
+  extractCertifications(text) {
+    const certs    = [];
+    const lines    = text.split('\n');
+    const certIdx  = this.findSectionIndex(lines, [/^certifications?$/i, /^courses?$/i, /^licenses?(\s*&\s*certifications?)?$/i]);
+    if (certIdx === -1) return certs;
+
+    const certLines = this.extractSectionLines(lines, certIdx);
+    certLines.forEach(line => {
+      const l = line.trim().replace(/^[•\-\*]\s*/, '');
+      if (l.length > 5) certs.push(l);
+    });
+    return certs;
+  }
+
+  // ─── Main parse function ──────────────────────────────────────────────────
+
   async parseResume(filePath, fileType) {
-    // Extract raw text
     const rawText = await this.extractText(filePath, fileType);
 
-    // Extract all sections
-    const contact = this.extractContactInfo(rawText);
-    const summary = this.extractSummary(rawText);
-    const education = this.extractEducation(rawText);
-    const skills = this.extractSkillsCategorized(rawText);
-    const projects = this.extractProjects(rawText);
-    const experience = this.extractExperience(rawText);
+    // Quick domain pre-detection so extractSkillsCategorized can use the right map.
+    // We import inline to avoid circular deps — domainTemplates has no parser dependency.
+    let detectedDomainKey = null;
+    try {
+      const { detectDomain } = require('./domainTemplates');
+      const domainResult = detectDomain(rawText);
+      detectedDomainKey  = domainResult?.key || null;
+    } catch (_) { /* domainTemplates not available — fall back to scanning all maps */ }
 
-    // Flatten skills for easy access
-    const allSkills = [
+    const contact        = this.extractContactInfo(rawText);
+    const summary        = this.extractSummary(rawText);
+    const education      = this.extractEducation(rawText);
+    const skills         = this.extractSkillsCategorized(rawText, detectedDomainKey);
+    const projects       = this.extractProjects(rawText);
+    const experience     = this.extractExperience(rawText);
+    const certifications = this.extractCertifications(rawText);
+
+    // Flat deduplicated skills list — includes tech + domain + soft skills
+    const allSkills = skills.all || [
       ...skills.languages,
       ...skills.frameworks,
       ...skills.databases,
       ...skills.tools,
       ...skills.ai_ml,
       ...skills.cloud,
+      ...skills.domain_skills,
+      ...skills.soft_skills,
       ...skills.other
     ];
 
+    // Structured data (used by aiAnalyzer and atsCalculator)
+    const structured = {
+      contact,
+      summary,
+      education,
+      skills,
+      projects,
+      experience,
+      certifications,
+      all_skills: allSkills,
+      detected_domain_key: detectedDomainKey
+    };
+
     return {
-      raw_text: rawText,
+      raw_text:  rawText,
       contact,
       summary,
       education,
@@ -441,24 +888,20 @@ class EnhancedResumeParser {
       skills_list: allSkills,
       projects,
       experience,
-      // Legacy format for compatibility
+      certifications,
       name: contact.name,
+      detected_domain_key: detectedDomainKey,
+
       sections: {
-        skills: allSkills.join(', '),
-        education: education.map(e => `${e.institute} - ${e.degree || ''} (${e.duration || ''})`).join('\n'),
-        projects: projects.map(p => `${p.name}: ${p.description}`).join('\n'),
-        experience: experience.map(e => `${e.platform}: ${e.description}`).join('\n')
+        skills:         skills,
+        education:      education,
+        projects:       projects,
+        experience:     experience,
+        certifications: certifications,
+        summary:        summary
       },
-      // Structured data for AI
-      structured: {
-        contact,
-        summary,
-        education,
-        skills,
-        projects,
-        experience,
-        all_skills: allSkills
-      }
+
+      structured
     };
   }
 }
