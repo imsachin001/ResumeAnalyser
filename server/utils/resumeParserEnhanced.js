@@ -30,12 +30,20 @@ class EnhancedResumeParser {
     if (!text) return '';
     return text
       .replace(/\r/g, '')
-      .replace(/\n\s*\n/g, '\n')
-      .replace(/\s{2,}/g, ' ')
-      .replace(/\t/g, ' ')
+      // IMPORTANT: split into lines FIRST, then collapse only horizontal
+      // whitespace (spaces/tabs) within each line. The previous version
+      // ran /\s{2,}/g across the whole string before splitting — but \s
+      // matches \n too, and pdf-parse commonly emits a trailing space
+      // right before each line's newline (e.g. "SACHIN JANGID \n").
+      // That trailing-space + newline is two whitespace chars in a row,
+      // so the old regex silently deleted the newline, merging the
+      // entire resume into 1-2 giant lines. Every line-anchored section
+      // detector (EDUCATION/PROJECTS/EXPERIENCE headers, bullet-point
+      // detection, formatting heading scan) then found nothing to match
+      // against, regardless of how good the resume actually was.
       .split('\n')
-      .map(l => l.trim())
-      .filter(l => l.length > 0)
+      .map(line => line.replace(/[ \t]{2,}/g, ' ').trim())
+      .filter(line => line.length > 0)
       .join('\n')
       .trim();
   }
@@ -222,7 +230,18 @@ class EnhancedResumeParser {
       const isDegree = degreePattern.test(line);
       const isInst   = institutionPattern.test(line) || /^[A-Z][A-Z\s]{4,}$/.test(line);
 
-      if (isInst && !isDate && !isDegree) {
+      // A single line can legitimately contain BOTH an institution name AND
+      // a date range, e.g. "Indian Institute of Information Technology,
+      // Trichy August 2023 – 2027" — the previous isInst check required
+      // !isDate, so this case fell through to the date-only branch and the
+      // institute name was silently dropped (institute stayed null even
+      // though it was right there in the same line as the duration).
+      if (isInst && isDate) {
+        if (current && (current.institute || current.degree)) education.push(current);
+        const dateMatch = line.match(datePattern);
+        const instituteName = dateMatch ? line.slice(0, dateMatch.index).trim().replace(/[,\s]+$/, '') : line;
+        current = { institute: instituteName || line, degree: null, duration: dateMatch ? dateMatch[0] : null, cgpa: null, details: [] };
+      } else if (isInst && !isDate && !isDegree) {
         if (current) education.push(current);
         current = { institute: line, degree: null, duration: null, cgpa: null, details: [] };
       } else if (isDegree && !isDate) {
@@ -681,31 +700,86 @@ class EnhancedResumeParser {
     if (projIdx === -1) return projects;
 
     const projLines = this.extractSectionLines(lines, projIdx);
-    let current     = null;
+    let current       = null;
+    let inDescription = false; // true once we've started appending wrapped bullet/description text for the current project
 
     projLines.forEach(rawLine => {
       const line = rawLine.trim();
       if (!line) return;
 
-      // Project title: usually short (<80 chars), starts with capital, NOT a bullet
       const isBullet = /^[•\-\*]/.test(line);
-      const isTitle  = !isBullet && line.length < 80 && /^[A-Z]/.test(line) &&
-                       !/^(react|node|python|mongo|express|built|developed|created|implemented)/i.test(line);
+
+      // Project title heuristic: the plain "<80 chars" rule misclassifies
+      // any title line that also contains a long GitHub URL (very common:
+      // "Project Name github.com/user/repo" easily exceeds 80 chars), which
+      // merges that project's heading into the PREVIOUS project's description
+      // and silently drops the project boundary. A title line is never a
+      // bullet, and is either short OR contains a project-link pattern,
+      // which is a stronger signal than raw length.
+      const hasProjectLink = /github\.com\/|gitlab\.com\/|bitbucket\.org\//i.test(line);
+      const isTitle = !isBullet &&
+                       /^[A-Z]/.test(line) &&
+                       (line.length < 80 || hasProjectLink) &&
+                       line.length < 140 &&
+                       !/^(react|node|python|mongo|express|built|developed|created|implemented|designed|engineered|architected|integrated|containerised|containerized|reduced)\b/i.test(line);
 
       if (isTitle) {
         if (current && (current.description.length > 0 || current.tech_stack.length > 0)) {
           projects.push(current);
         }
         current = { name: line, tech_stack: [], description: [], status: null, link: null };
-      } else if (current && /https?:\/\//.test(line)) {
+        inDescription = false;
+        const linkMatch = line.match(/https?:\/\/[^\s]+|(?:github|gitlab)\.com\/[^\s]+/i);
+        if (linkMatch) current.link = linkMatch[0];
+        return;
+      }
+
+      if (!current) return;
+
+      if (/https?:\/\//.test(line) && !isBullet) {
         current.link = line.match(/https?:\/\/[^\s]+/)[0];
-      } else if (current && /(in progress|completed|ongoing)/i.test(line)) {
+        return;
+      }
+      if (/^(in progress|completed|ongoing)$/i.test(line)) {
         current.status = line;
-      } else if (current && (/[|,]/.test(line) && line.split(/[|,]/).length >= 2)) {
-        // Likely a tech-stack line
+        return;
+      }
+
+      // Once a bullet starts, every following non-bullet, non-title line is
+      // a WRAPPED CONTINUATION of that bullet (PDF extraction frequently
+      // breaks one sentence across two physical lines, and the continuation
+      // loses its bullet marker). Without this, continuation lines that
+      // happen to contain 2+ commas get misread as tech-stack lines.
+      if (isBullet) {
+        inDescription = true;
+        current.description.push(line.replace(/^[•\-\*]\s*/, ''));
+        return;
+      }
+
+      if (inDescription) {
+        const isObviousTechList = line.length < 60 &&
+                                   /^[A-Za-z0-9.+#\s,|]+$/.test(line) &&
+                                   /[|,]/.test(line) &&
+                                   !/[.!]$/.test(line);
+        if (isObviousTechList) {
+          current.tech_stack.push(...line.split(/[|,]/).map(t => t.trim()).filter(t => t.length > 1));
+        } else {
+          current.description.push(line);
+        }
+        return;
+      }
+
+      // Not yet inside any bullet — likely a genuine tech-stack line
+      // sitting between the title and the first bullet.
+      const looksLikeTechList = line.length < 100 &&
+                                 /[|,]/.test(line) &&
+                                 line.split(/[|,]/).length >= 2 &&
+                                 !/\b(a|the|and|with|using|for|to|of|in|via|by)\b/i.test(line);
+
+      if (looksLikeTechList) {
         current.tech_stack.push(...line.split(/[|,]/).map(t => t.trim()).filter(t => t.length > 1));
-      } else if (current) {
-        current.description.push(isBullet ? line.replace(/^[•\-\*]\s*/, '') : line);
+      } else {
+        current.description.push(line);
       }
     });
 

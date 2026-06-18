@@ -226,7 +226,9 @@ RESPONSE FORMAT — return ONLY valid JSON, no markdown:
   "recommendations": ["4–6 SPECIFIC, ACTIONABLE improvements for this domain"],
   "strengths": ["3–5 key strengths"],
   "weaknesses": ["2–3 constructive improvement areas phrased positively"],
-  "suggested_roles": ["3–4 suitable ${domainInfo.name} roles"],
+  "suggested_roles": [
+    { "role": "role name", "fit_score": <0-100, how well THIS resume currently fits this specific role>, "reasoning": "one short sentence" }
+  ],
   "summary": "2–3 sentence professional summary",
   "experience_level": "entry|mid|senior",
   "key_achievements": ["2–4 notable achievements from the resume"],
@@ -238,6 +240,7 @@ QUALITY RULES:
 - Matched skills must actually appear in the resume.
 - Missing skills must be high-impact for THIS domain only.
 - Recommendations must be actionable and specific to what is already in the resume.
+- Each suggested role's fit_score must be internally consistent — a role you also describe as a poor or partial fit must NOT receive a high fit_score.
 - PROVIDE ONLY THE JSON. NO ADDITIONAL TEXT OR MARKDOWN.`;
   }
 
@@ -330,7 +333,9 @@ RESPONSE FORMAT — ONLY valid JSON, no markdown:
   "recommendations": ["5–7 specific, JD-driven, actionable improvements"],
   "strengths": ["3–5 resume strengths relative to this JD"],
   "weaknesses": ["2–3 resume gaps relative to this JD, phrased constructively"],
-  "suggested_roles": ["3–4 roles this resume is suited for, including the JD role"],
+  "suggested_roles": [
+    { "role": "role name (the literal JD role and/or close alternatives)", "fit_score": <0-100>, "reasoning": "one short sentence" }
+  ],
   "summary": "2–3 sentence evaluation of fit for this specific JD",
   "experience_level": "entry|mid|senior",
   "key_achievements": ["2–4 achievements from resume most relevant to JD"],
@@ -341,6 +346,7 @@ CRITICAL RULES:
 - missing_skills MUST come from the JD only — do not invent generic gaps.
 - recommendations MUST reference specific JD requirements — no generic advice.
 - match_score MUST be calculated using Step 3 formula — do not guess.
+- The fit_score for the literal JD role MUST be consistent with match_score (within ~10 points). If the resume is a weak or significant mismatch for the JD, that role's fit_score must be low too — never describe a role as a mismatch in your reasoning while giving it a high fit_score.
 - PROVIDE ONLY THE JSON. NO EXTRA TEXT OR MARKDOWN.`;
   }
 
@@ -359,9 +365,10 @@ CRITICAL RULES:
       keywords: detectedDomain.matchedKeywords.slice(0, 5)
     });
 
-    // Step 2: Calculate ATS score (always rule-based — consistent & reproducible)
-    const atsResult = atsCalculator.calculateATSScore(parsedData, detectedDomain.template);
-    console.log(`\n📊 ATS Score Breakdown:`, atsResult);
+    // Step 2: Calculate Resume Quality (always rule-based — consistent,
+    // reproducible, and deliberately domain/JD-agnostic; see atsCalculator.js)
+    const resumeQuality = atsCalculator.calculateResumeQualityScore(parsedData);
+    console.log(`\n📊 Resume Quality Breakdown:`, resumeQuality);
 
     // Step 3: Experience timeline
     const expArray        = Array.isArray(parsedData.structured?.experience)
@@ -372,7 +379,7 @@ CRITICAL RULES:
     // No API key → enhanced fallback
     if (!apiKey) {
       console.log('No Gemini API key — using enhanced fallback analysis');
-      return this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, atsResult, experienceTimeline, hasJD, jobDescription);
+      return this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription);
     }
 
     try {
@@ -396,18 +403,19 @@ CRITICAL RULES:
       } catch (parseErr) {
         console.error('JSON parse error:', parseErr.message);
         console.log('Raw Gemini response:', rawText.slice(0, 500));
-        analysisData = this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, atsResult, experienceTimeline, hasJD, jobDescription);
+        analysisData = this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription);
       }
 
-      // Step 5: ATS improvement cards
+      // Step 5: ATS improvement cards (Resume Quality areas only — Contact,
+      // Sections, Formatting, Action Verbs, Experience Depth)
       let atsImprovements = [];
       try {
         atsImprovements = await this.generateAtsImprovements(
-          parsedData, atsResult, detectedDomain, jobDescription, apiKey
+          parsedData, resumeQuality, detectedDomain, jobDescription, apiKey
         );
       } catch (e) {
         console.error('ATS improvements error:', e.message);
-        atsImprovements = this.createFallbackAtsImprovements(atsResult, detectedDomain);
+        atsImprovements = this.createFallbackAtsImprovements(resumeQuality, detectedDomain);
       }
 
       // Step 6: Compute match_score ourselves — never trust Gemini's number
@@ -426,24 +434,31 @@ CRITICAL RULES:
           ? `${projCount} project(s) (student/fresher)`
           : '0 yrs, 0 roles';
 
-      // Step 8: Merge — our computed values override Gemini where needed
+      // Step 8: Combine Resume Quality + Job Match into the final ATS
+      // Compatibility score. Weighted 60/40 — a well-built resume for the
+      // wrong role should land in the middle, not score as if either
+      // factor alone determined hireability.
+      const atsCompatibility = Math.round(0.6 * resumeQuality.total + 0.4 * match_score);
+
+      // Step 9: Merge — our computed values override Gemini where needed
       return {
         ...analysisData,
-        match_score,                          // OUR calculation, not Gemini's
-        ats_score:           atsResult.total,
-        ats_breakdown:       atsResult.breakdown,
-        ats_improvements:    atsImprovements,
-        detected_domain:     detectedDomain.name,
-        domain_match_score:  detectedDomain.score,
-        has_jd:              hasJD,
-        experience_summary:  expSummary,
-        experience_timeline: experienceTimeline,
-        section_completeness: this.calculateSectionCompleteness(parsedData)
+        match_score,                              // Job Match — OUR calculation, not Gemini's
+        resume_quality_score:     resumeQuality.total,
+        resume_quality_breakdown: resumeQuality.breakdown,
+        ats_score:                atsCompatibility, // combined compatibility, not a raw rule-based score anymore
+        ats_improvements:         atsImprovements,
+        detected_domain:          detectedDomain.name,
+        domain_match_score:       detectedDomain.score,
+        has_jd:                   hasJD,
+        experience_summary:       expSummary,
+        experience_timeline:      experienceTimeline,
+        section_completeness:     this.calculateSectionCompleteness(parsedData)
       };
 
     } catch (err) {
       console.error('Gemini API error:', err.message);
-      return this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, atsResult, experienceTimeline, hasJD, jobDescription);
+      return this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription);
     }
   }
 
@@ -451,19 +466,19 @@ CRITICAL RULES:
   // ATS IMPROVEMENT CARDS
   // ─────────────────────────────────────────────────────────────────────────
 
-  async generateAtsImprovements(parsedData, atsResult, detectedDomain, jobDescription, apiKey) {
+  async generateAtsImprovements(parsedData, resumeQuality, detectedDomain, jobDescription, apiKey) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
 
-    const maxScores = { contact: 15, sections: 20, keywords: 35, actionVerbs: 15, formatting: 10, experienceBonus: 5 };
+    // Resume Quality areas only — Contact/Sections/Formatting/Action Verbs/
+    // Experience Depth. Raw weights sum to 60 (see atsCalculator.js).
+    const maxScores = { contact: 10, sections: 15, formatting: 10, actionVerbs: 10, experienceDepth: 15 };
 
-    const prompt = `You are an ATS improvement coach. Generate actionable cards to improve low-scoring ATS areas.
+    const prompt = `You are a resume-quality coach. Generate actionable cards to improve low-scoring RESUME QUALITY areas — structure, formatting, and writing quality. Do NOT suggest adding specific skills, technologies, or keywords; that is handled separately by the Job Match analysis.
 
 CONTEXT (JSON):
 ${JSON.stringify({
-  domain:        detectedDomain?.name || 'Unknown',
-  jobDescription: jobDescription ? jobDescription.slice(0, 400) : '',
-  scores:         atsResult.breakdown,
+  scores:         resumeQuality.breakdown,
   maxScores,
   resumeSignals: {
     hasLinkedIn:  !!parsedData.contact?.linkedin,
@@ -471,25 +486,23 @@ ${JSON.stringify({
     hasPortfolio: !!parsedData.contact?.portfolio,
     projectCount: Array.isArray(parsedData.projects) ? parsedData.projects.length : 0,
     skillsCount:  (parsedData.skills_list || []).length
-  },
-  domainSkills:   (detectedDomain?.template?.important_skills || []).slice(0, 15),
-  domainKeywords: (detectedDomain?.template?.keywords || []).slice(0, 15)
+  }
 }, null, 2)}
 
 RULES:
 1. Focus ONLY on areas where score < 70% of maxScore.
 2. Return 2–4 cards total.
 3. Each card: area, score, maxScore, priority (high/medium/low), whatToAdd (3–5 items), whatToAvoid (2–3 items), quickWins (2–3 items).
-4. Advice must be specific to the domain${jobDescription ? ' AND the job description' : ''}.
+4. Advice must be about STRUCTURE, FORMATTING, and WRITING QUALITY only — never about which skills/technologies to add.
 5. No markdown inside strings. Plain text only.
 
 RESPONSE — ONLY valid JSON:
 {
   "ats_improvements": [
     {
-      "area": "Keywords",
+      "area": "Experience Depth",
       "score": 10,
-      "maxScore": 35,
+      "maxScore": 25,
       "priority": "high",
       "whatToAdd": ["...", "..."],
       "whatToAvoid": ["...", "..."],
@@ -505,15 +518,15 @@ RESPONSE — ONLY valid JSON:
     return Array.isArray(parsed.ats_improvements) ? parsed.ats_improvements : [];
   }
 
-  createFallbackAtsImprovements(atsResult, detectedDomain) {
-    const maxScores = { contact: 15, sections: 20, keywords: 35, actionVerbs: 15, formatting: 10, experienceBonus: 5 };
+  createFallbackAtsImprovements(resumeQuality, detectedDomain) {
+    const maxScores = { contact: 10, sections: 15, formatting: 10, actionVerbs: 10, experienceDepth: 15 };
     const areaLabels = {
-      contact: 'Contact Details', sections: 'Resume Sections', keywords: 'Keywords',
-      actionVerbs: 'Action Verbs & Metrics', formatting: 'Formatting', experienceBonus: 'Experience Depth'
+      contact: 'Contact Details', sections: 'Resume Sections',
+      actionVerbs: 'Action Verbs & Metrics', formatting: 'Formatting', experienceDepth: 'Experience Depth'
     };
 
     const sorted = Object.keys(maxScores)
-      .map(k => ({ key: k, score: atsResult.breakdown[k] || 0, maxScore: maxScores[k], ratio: (atsResult.breakdown[k] || 0) / maxScores[k] }))
+      .map(k => ({ key: k, score: resumeQuality.breakdown[k] || 0, maxScore: maxScores[k], ratio: (resumeQuality.breakdown[k] || 0) / maxScores[k] }))
       .sort((a, b) => a.ratio - b.ratio);
 
     const lowAreas = sorted.filter(a => a.ratio < 0.7);
@@ -526,16 +539,16 @@ RESPONSE — ONLY valid JSON:
       priority:  area.ratio < 0.4 ? 'high' : area.ratio < 0.7 ? 'medium' : 'low',
       whatToAdd: [
         'Add clear, ATS-friendly section headings (SKILLS, EXPERIENCE, EDUCATION)',
-        `Include ${detectedDomain?.name || 'role'}-specific keywords in Skills and Experience`,
-        'Use short, metric-driven bullet points (e.g., "Reduced load time by 40%")'
+        'Use short, metric-driven bullet points (e.g., "Reduced load time by 40%")',
+        'Add a Projects or Experience section with 3+ substantive bullet points each'
       ],
       whatToAvoid: [
         'Avoid graphics, tables, or multi-column layouts that confuse ATS parsers',
-        'Do not hide keywords only in image-based text or headers/footers'
+        'Avoid vague phrasing like "responsible for" — lead with a strong action verb instead'
       ],
       quickWins: [
         'Add 2–3 measurable achievements with numbers or percentages',
-        'Mirror 3–5 exact phrases from the job description in your Skills section'
+        'Make sure contact info (email, phone, LinkedIn, GitHub) is in plain text near the top'
       ]
     }));
   }
@@ -544,7 +557,7 @@ RESPONSE — ONLY valid JSON:
   // FALLBACK ANALYSIS (no API key or Gemini error)
   // ─────────────────────────────────────────────────────────────────────────
 
-  createEnhancedFallbackAnalysis(parsedData, detectedDomain, atsResult, experienceTimeline, hasJD, jobDescription) {
+  createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription) {
     const resumeText     = parsedData.raw_text || '';
     const domainKey      = parsedData.detected_domain_key || detectedDomain?.key || null;
     const matchedSkills  = this.matchSkillsAgainstDictionary(parsedData.skills_list || [], resumeText, domainKey);
@@ -553,6 +566,11 @@ RESPONSE — ONLY valid JSON:
 
     // Compute match score using structured signals (same as Gemini path)
     const { match_score } = this.computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD);
+
+    // Combine Resume Quality + Job Match into the final ATS Compatibility
+    // score — same 60/40 weighting as the Gemini path, so the number means
+    // the same thing regardless of which path produced it.
+    const atsCompatibility = Math.round(0.6 * resumeQuality.total + 0.4 * match_score);
 
     let missingSkills = this.identifyMissingDomainSkills(matchedDomain, domainSkills);
 
@@ -583,16 +601,17 @@ RESPONSE — ONLY valid JSON:
         : '0 yrs, 0 roles';
 
     return {
-      ats_score:            atsResult.total,
-      ats_breakdown:        atsResult.breakdown,
-      ats_improvements:     this.createFallbackAtsImprovements(atsResult, detectedDomain),
+      ats_score:                atsCompatibility,
+      resume_quality_score:     resumeQuality.total,
+      resume_quality_breakdown: resumeQuality.breakdown,
+      ats_improvements:         this.createFallbackAtsImprovements(resumeQuality, detectedDomain),
       match_score,
       matched_skills:       [...new Set([...matchedSkills, ...matchedDomain])],
       missing_skills:       missingSkills,
       recommendations:      this.generateDomainRecommendations(parsedData, detectedDomain, hasJD),
       strengths:            this.identifyStrengths(parsedData, matchedSkills),
-      weaknesses:           this.identifyWeaknesses(parsedData),
-      suggested_roles:      detectedDomain.template.suggested_roles.slice(0, 4),
+      weaknesses:            this.identifyWeaknesses(parsedData),
+      suggested_roles:      this.buildFallbackSuggestedRoles(detectedDomain, match_score),
       summary:              this.generateSummary(parsedData, detectedDomain, experienceTimeline) + jdNote,
       experience_level:     this.determineExperienceLevel(experienceTimeline),
       key_achievements:     this.extractKeyAchievements(parsedData),
@@ -606,27 +625,40 @@ RESPONSE — ONLY valid JSON:
     };
   }
 
+  // {role, fit_score, reasoning} objects anchored to the already-computed
+  // match_score, instead of a bare role-name list with no score at all —
+  // avoids the frontend having to invent its own arbitrary per-role
+  // percentage (which previously produced contradictions like a role
+  // described as "a significant mismatch" still showing 95% match).
+  buildFallbackSuggestedRoles(detectedDomain, matchScore) {
+    return detectedDomain.template.suggested_roles.slice(0, 4).map((role, i) => ({
+      role,
+      fit_score: Math.max(matchScore - i * 8, 10),
+      reasoning: `Estimated from overlap with core ${detectedDomain.template.name} skills.`
+    }));
+  }
+
   /**
-   * Compute match_score entirely from structured signals.
+   * Compute match_score (0-100) entirely from structured signals.
    * Never rely on Gemini for this number — it's inconsistent.
    *
-   * With JD:  weighted comparison of JD keywords vs resume content
-   * Without JD: weighted comparison of domain important_skills vs resume content
+   * JD Match sub-component raw weights (sum = 40, scaled ×2.5 → 100):
+   *   Skills match    25  — hard skill overlap between resume and JD/domain
+   *   Domain match    10  — experience / project relevance to target domain
+   *   Keywords         5  — education + professional presence signals
    *
-   * Score bands:
-   *   Strong (70–95):  most requirements met
+   * Score bands (after scaling):
+   *   Strong   (70–95): most requirements met
    *   Moderate (45–69): half of requirements met
-   *   Weak (20–44):    few requirements met
+   *   Weak     (20–44): few requirements met
    */
   computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD) {
     const resumeText = (parsedData.raw_text || '').toLowerCase();
     const domainKey  = parsedData.detected_domain_key || detectedDomain?.key || null;
-    const allSkills  = parsedData.skills_list || [];
 
-    // ── Part A: Skills match (50 pts) ─────────────────────────────────────
-    let skillsScore = 0;
+    // ── Skills match (25 raw pts) ─────────────────────────────────────────
+    let skillsRaw = 0;
     if (hasJD) {
-      // JD keyword extraction using our domain dictionary
       const dictionary  = this.getSkillDictionaryForDomain(domainKey);
       const jdText      = jobDescription.toLowerCase();
       const jdKeywords  = dictionary.filter(skill => {
@@ -639,19 +671,17 @@ RESPONSE — ONLY valid JSON:
           const esc = skill.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           return new RegExp(`\\b${esc}\\b`, 'i').test(resumeText);
         });
-        // Linear ratio with a minimum floor so resumes that match half the JD
-        // don't get less than 20/50 on skills alone
-        skillsScore = Math.round((matched.length / jdKeywords.length) * 50);
+        skillsRaw = Math.round((matched.length / jdKeywords.length) * 25);
       } else {
-        // JD has no recognisable skills → domain match instead
-        skillsScore = this._domainSkillsScore(resumeText, detectedDomain, 50);
+        // JD has no recognisable skills → domain match fallback
+        skillsRaw = this._domainSkillsScore(resumeText, detectedDomain, 25);
       }
     } else {
-      skillsScore = this._domainSkillsScore(resumeText, detectedDomain, 50);
+      skillsRaw = this._domainSkillsScore(resumeText, detectedDomain, 25);
     }
 
-    // ── Part B: Experience / Projects relevance (30 pts) ──────────────────
-    let expScore = 0;
+    // ── Domain match (10 raw pts) — experience / project relevance ────────
+    let domainRaw = 0;
     const structured   = parsedData.structured || {};
     const profExpCount = (structured.experience || []).filter(e => e.type === 'professional').length;
     const projCount    = (structured.projects   || []).filter(p =>
@@ -660,40 +690,36 @@ RESPONSE — ONLY valid JSON:
     ).length;
     const hasMetrics   = this.metricPatterns.some(p => p.test(parsedData.raw_text || ''));
 
-    if (profExpCount >= 3)       expScore = 30;
-    else if (profExpCount >= 1)  expScore = 22 + Math.min(profExpCount * 4, 8);
-    else if (projCount >= 3)     expScore = hasMetrics ? 22 : 18;
-    else if (projCount >= 2)     expScore = hasMetrics ? 18 : 14;
-    else if (projCount >= 1)     expScore = 10;
-    else                         expScore = 0;
+    if (profExpCount >= 3)       domainRaw = 10;
+    else if (profExpCount >= 1)  domainRaw = 7 + Math.min(profExpCount * 1, 3);
+    else if (projCount >= 3)     domainRaw = hasMetrics ? 7 : 6;
+    else if (projCount >= 2)     domainRaw = hasMetrics ? 6 : 5;
+    else if (projCount >= 1)     domainRaw = 3;
+    else                         domainRaw = 0;
 
-    // ── Part C: Education match (10 pts) ──────────────────────────────────
-    let eduScore = 0;
-    const eduList = structured.education || [];
-    if (eduList.length > 0) {
-      const hasMasters = /master|mba|m\.tech|m\.sc|m\.e\.|m\.des|phd|ph\.d/i.test(resumeText);
-      const hasBachelors = /bachelor|b\.tech|b\.e\.|b\.sc|b\.a\.|degree|diploma/i.test(resumeText);
-      if (hasMasters)        eduScore = 10;
-      else if (hasBachelors) eduScore = 8;
-      else                   eduScore = 5;
-    } else if (/\b(education|degree|university|college|institute|school)\b/i.test(resumeText)) {
-      // Education mentioned in raw text even if parser missed the section
-      eduScore = 6;
-    }
-
-    // ── Part D: Professional presence (10 pts) ────────────────────────────
-    let presenceScore = 0;
+    // ── Keywords (5 raw pts) — education + professional presence ──────────
+    let keywordsRaw = 0;
     const contact = parsedData.contact || {};
-    if (contact.linkedin)                    presenceScore += 3;
-    if (contact.github || contact.portfolio) presenceScore += 3;
-    if (contact.email)                       presenceScore += 2;
-    if (contact.phone)                       presenceScore += 2;
+    const eduList  = structured.education || [];
 
-    const total = skillsScore + expScore + eduScore + presenceScore;
+    // Education present (up to 3 pts)
+    if (eduList.length > 0 || /\b(education|degree|university|college|institute|school)\b/i.test(resumeText)) {
+      const hasMasters   = /master|mba|m\.tech|m\.sc|m\.e\.|m\.des|phd|ph\.d/i.test(resumeText);
+      const hasBachelors = /bachelor|b\.tech|b\.e\.|b\.sc|b\.a\.|degree|diploma/i.test(resumeText);
+      keywordsRaw += hasMasters ? 3 : hasBachelors ? 2 : 1;
+    }
+    // Professional presence (up to 2 pts)
+    if (contact.linkedin)                    keywordsRaw += 1;
+    if (contact.github || contact.portfolio) keywordsRaw += 1;
+    keywordsRaw = Math.min(keywordsRaw, 5);
+
+    // ── Scale raw /40 → /100 ─────────────────────────────────────────────
+    const rawTotal = skillsRaw + domainRaw + keywordsRaw;
+    const total    = Math.round((rawTotal / 40) * 100);
 
     return {
-      match_score: Math.min(Math.max(Math.round(total), 10), 98),
-      _debug: { skillsScore, expScore, eduScore, presenceScore }
+      match_score: Math.min(Math.max(total, 10), 98),
+      _debug: { skillsRaw, domainRaw, keywordsRaw, rawTotal }
     };
   }
 

@@ -1,16 +1,33 @@
 /**
- * Advanced ATS Score Calculator
- * Implements weighted scoring with section completeness and action verb detection
+ * Resume Quality Calculator (formerly "ATS Calculator")
  *
- * FIXES:
- * - Removed flat 30-point floor so scores actually differentiate weak vs strong resumes
- * - Contact score now penalizes missing email/phone more sharply (email is critical)
- * - Keyword score: no-domain fallback reduced from 15→8 so resumes without a clear domain
- *   don't get a free pass; also uses a sqrt curve so early keyword matches matter more
- * - Action verb score now counts distinct verb TYPES and also checks for metric language
- * - Formatting score checks line/bullet density, not just raw length
- * - Experience bonus now grades internships vs professional roles differently
- * - Min score lowered to 20 (not 30) so poor resumes surface as poor
+ * SCOPE — this file is intentionally domain/JD-agnostic. It answers one
+ * question only: "is this resume well-built?" — contact completeness,
+ * section completeness, formatting, action verbs/quantified impact, and
+ * experience depth. It never looks at a job description or a domain's
+ * skill list.
+ *
+ * Domain/JD skill matching ("Job Match") lives entirely in aiAnalyzer.js's
+ * computeMatchScore(). Keeping the two separate means a UX designer who
+ * applies to a Business Analyst role gets a HIGH resume_quality_score
+ * (their resume is well-built) and a LOW match_score (wrong skills for
+ * this role) instead of one muddy number that conflates both.
+ *
+ * resume_quality_score (0-100) breakdown — raw weights sum to 60,
+ * then scaled ×(100/60) so the final score is always out of 100:
+ *
+ *   Contact            10  (raw)  → ~17 pts of 100
+ *   Sections           15  (raw)  → ~25 pts of 100
+ *   Formatting         10  (raw)  → ~17 pts of 100
+ *   Action Verbs +
+ *   Quantified Impact  10  (raw)  → ~17 pts of 100
+ *   Experience Depth   15  (raw)  → ~25 pts of 100
+ *   ─────────────────────────────────────────────
+ *   Total raw          60  → scaled to 100
+ *
+ * aiAnalyzer.js then combines this with match_score (0-100) into the
+ * final ats_score:
+ *   ats_score = round(0.6 × resume_quality_score + 0.4 × match_score)
  */
 
 class ATSCalculator {
@@ -38,76 +55,79 @@ class ATSCalculator {
       /₹\s*\d+/,                    // INR amounts
       /lpa|lakh/i
     ];
+
+    // Recognised month names, used by extractYearsFromDuration's
+    // date-range parser below.
+    this.monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
   }
 
   /**
-   * Calculate comprehensive ATS score based on multiple factors.
-   * Total possible: 100 points. Minimum returned: 20. Maximum: 100.
+   * Calculate Resume Quality score — domain/JD-agnostic structural
+   * quality only. Total possible: 100 points. Minimum returned: 20.
+   *
+   * NOTE: no longer takes a domainTemplate parameter — domain/keyword
+   * matching is "Job Match" territory now (see aiAnalyzer.computeMatchScore),
+   * not Resume Quality.
    */
-  calculateATSScore(parsedData, domainTemplate) {
-    let score = 0;
+  calculateResumeQualityScore(parsedData) {
+    let rawScore = 0;
     const breakdown = {};
 
-    // 1. Contact Information Completeness (15 points)
+    // 1. Contact Information Completeness (10 raw pts)
     const contactScore = this.calculateContactScore(parsedData.contact);
-    score += contactScore;
+    rawScore += contactScore;
     breakdown.contact = contactScore;
 
-    // 2. Section Completeness (20 points)
+    // 2. Section Completeness (15 raw pts)
     const sectionScore = this.calculateSectionCompleteness(parsedData);
-    score += sectionScore;
+    rawScore += sectionScore;
     breakdown.sections = sectionScore;
 
-    // 3. Keyword Matching weighted by domain (35 points)
-    // Reduced from 40 → 35 to give more weight to the new metrics bonus below
-    const keywordScore = this.calculateKeywordScore(parsedData, domainTemplate);
-    score += keywordScore;
-    breakdown.keywords = keywordScore;
-
-    // 4. Action Verbs + Quantification (15 points)
-    // Increased from 10 → 15: verbs alone (10) + metric language (5)
-    const actionVerbScore = this.calculateActionVerbScore(parsedData.raw_text);
-    score += actionVerbScore;
-    breakdown.actionVerbs = actionVerbScore;
-
-    // 5. Formatting & Structure (10 points)
+    // 3. Formatting & Structure (10 raw pts)
     const formattingScore = this.calculateFormattingScore(parsedData);
-    score += formattingScore;
+    rawScore += formattingScore;
     breakdown.formatting = formattingScore;
 
-    // 6. Experience Quality (5 points bonus)
-    const experienceBonus = this.calculateExperienceBonus(parsedData);
-    score += experienceBonus;
-    breakdown.experienceBonus = experienceBonus;
+    // 4. Action Verbs + Quantified Impact (10 raw pts)
+    const actionVerbScore = this.calculateActionVerbScore(parsedData.raw_text);
+    rawScore += actionVerbScore;
+    breakdown.actionVerbs = actionVerbScore;
 
-    // No artificial floor — minimum 20 so scores spread naturally
+    // 5. Experience / Project Depth (15 raw pts)
+    const experienceDepth = this.calculateExperienceDepth(parsedData);
+    rawScore += experienceDepth;
+    breakdown.experienceDepth = experienceDepth;
+
+    // Scale raw /60 → /100 (min 20 enforced after scaling)
+    const scaled = Math.round((rawScore / 60) * 100);
+
     return {
-      total: Math.min(Math.max(Math.round(score), 20), 100),
-      breakdown
+      total: Math.min(Math.max(scaled, 20), 100),
+      breakdown,
+      // Expose raw max values so the UI can show "X / maxScore"
+      maxScores: { contact: 10, sections: 15, formatting: 10, actionVerbs: 10, experienceDepth: 15 }
     };
   }
 
   /**
-   * Contact information completeness (15 points max).
+   * Contact information completeness (10 points max).
    * Email is critical — missing it is heavily penalised.
    */
   calculateContactScore(contact) {
     if (!contact) return 0;
     let score = 0;
 
-    if (contact.name)  score += 2;
-    if (contact.email) score += 5;   // Critical — up from 4
-    if (contact.phone) score += 3;
-    if (contact.linkedin)                    score += 2.5;
-    if (contact.github || contact.portfolio) score += 2.5;
+    if (contact.name)  score += 1;
+    if (contact.email) score += 4;   // Critical
+    if (contact.phone) score += 2;
+    if (contact.linkedin)                    score += 1.5;
+    if (contact.github || contact.portfolio) score += 1.5;
 
-    return Math.min(Math.round(score), 15);
+    return Math.min(Math.round(score), 10);
   }
 
   /**
-   * Section completeness check (20 points max).
-   * Two-pass: structured data first, then raw text heading scan as fallback.
-   * This ensures parsing failures don't tank the score.
+   * Section completeness check (15 points max).
    */
   calculateSectionCompleteness(parsedData) {
     let score = 0;
@@ -135,82 +155,53 @@ class ATSCalculator {
       return headingRegex ? headingRegex.test(text) : false;
     };
 
-    // Education (6 pts)
+    // Education (4 pts)
     if (sectionPresent(
       ['education'],
       /\b(education|academic background|b\.?tech|bachelor|master|degree|university|college|institute)\b/i
-    )) score += 6;
+    )) score += 4;
 
-    // Skills (6 pts)
+    // Skills (4 pts)
     if (sectionPresent(
       ['skills', 'all_skills'],
       /\b(skills?|technical skills?|languages?|frameworks?|tools|core competencies)\b/i
-    )) score += 6;
+    )) score += 4;
 
-    // Experience OR Projects (5 pts) — students with projects qualify
+    // Experience OR Projects (3 pts) — students with projects qualify
     const hasExp  = sectionPresent(['experience'], /\b(experience|work history|employment|internship)\b/i);
     const hasProj = sectionPresent(['projects'],   /\b(projects?|personal projects?|key projects?)\b/i);
-    if (hasExp || hasProj) score += 5;
+    if (hasExp || hasProj) score += 3;
 
-    // Projects specifically (2 pts bonus on top if both present)
+    // Projects specifically (2 pts bonus if both present)
     if (hasExp && hasProj) score += 2;
 
-    // Summary/Objective (1 pt)
+    // Summary/Objective (2 pts)
     if (sectionPresent(
       ['summary'],
       /\b(summary|objective|career objective|profile|about me|professional summary)\b/i
-    )) score += 1;
+    )) score += 2;
 
-    return Math.min(score, 20);
+    return Math.min(score, 15);
   }
 
-  /**
-   * Keyword matching weighted by domain importance (35 points max).
-   *
-   * Uses a square-root curve so the first few keyword matches give a good
-   * boost and diminishing returns kick in — this prevents "keyword stuffed"
-   * resumes from dominating while still rewarding broad coverage.
-   */
-  calculateKeywordScore(parsedData, domainTemplate) {
-    // No domain detected → small base so poor resumes still score low
-    if (!domainTemplate) return 8;
-
-    const resumeText      = (parsedData.raw_text || '').toLowerCase();
-    const importantSkills = domainTemplate.important_skills || [];
-    const keywords        = domainTemplate.keywords || [];
-
-    const countMatches = (list) =>
-      list.filter(item => {
-        const escaped = item.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return new RegExp(`\\b${escaped}\\b`, 'i').test(resumeText);
-      }).length;
-
-    const matchedImportant = countMatches(importantSkills);
-    const matchedKeywords  = countMatches(keywords);
-
-    // Square-root curve: rewards first matches more than later ones
-    const importantRatio = importantSkills.length > 0
-      ? Math.sqrt(matchedImportant / importantSkills.length)
-      : 0;
-    const keywordRatio = keywords.length > 0
-      ? Math.sqrt(matchedKeywords / keywords.length)
-      : 0;
-
-    const importantScore = Math.round(importantRatio * 22); // max 22
-    const keywordScore   = Math.round(keywordRatio   * 13); // max 13
-
-    return Math.min(importantScore + keywordScore, 35);
-  }
+  // NOTE: domain/JD keyword matching used to live here as
+  // calculateKeywordScore(), contributing up to 35 of the old ATS total.
+  // It has been removed — that's exactly the kind of domain-specific
+  // signal that belongs in Job Match (aiAnalyzer.computeMatchScore),
+  // not in a domain-agnostic Resume Quality score. Without this removal,
+  // Resume Quality and Job Match were both rewarding the same domain
+  // keyword overlap, making the two scores redundant instead of
+  // complementary.
 
   /**
-   * Action verbs + quantification (15 points max).
-   * - Verb variety: up to 10 pts
-   * - Metric/quantification language: up to 5 pts (new)
+   * Action verbs + quantification (10 points max).
+   * - Verb variety: up to 7 pts
+   * - Metric/quantification language: up to 3 pts
    */
   calculateActionVerbScore(resumeText) {
     if (!resumeText) return 0;
 
-    // --- Verb variety (10 pts) ---
+    // --- Verb variety (7 pts) ---
     const textLower = resumeText.toLowerCase();
     let matchedVerbs = 0;
     this.actionVerbs.forEach(verb => {
@@ -218,29 +209,28 @@ class ATSCalculator {
     });
 
     let verbScore = 0;
-    if (matchedVerbs >= 12) verbScore = 10;
-    else if (matchedVerbs >= 8)  verbScore = 8;
-    else if (matchedVerbs >= 5)  verbScore = 6;
-    else if (matchedVerbs >= 3)  verbScore = 4;
-    else if (matchedVerbs >= 1)  verbScore = 2;
+    if (matchedVerbs >= 12) verbScore = 7;
+    else if (matchedVerbs >= 8)  verbScore = 5;
+    else if (matchedVerbs >= 5)  verbScore = 4;
+    else if (matchedVerbs >= 3)  verbScore = 2;
+    else if (matchedVerbs >= 1)  verbScore = 1;
 
-    // --- Metric / quantification language (5 pts) ---
+    // --- Metric / quantification language (3 pts) ---
     let metricHits = 0;
     this.metricPatterns.forEach(pattern => {
       if (pattern.test(resumeText)) metricHits++;
     });
 
     let metricScore = 0;
-    if (metricHits >= 4)     metricScore = 5;
-    else if (metricHits >= 2) metricScore = 3;
+    if (metricHits >= 4)     metricScore = 3;
+    else if (metricHits >= 2) metricScore = 2;
     else if (metricHits >= 1) metricScore = 1;
 
-    return Math.min(verbScore + metricScore, 15);
+    return Math.min(verbScore + metricScore, 10);
   }
 
   /**
    * Formatting and structure quality (10 points max).
-   * Checks text length, section count (from raw text headings), and bullet density.
    */
   calculateFormattingScore(parsedData) {
     let score = 0;
@@ -252,7 +242,6 @@ class ATSCalculator {
     else if (text.length >= 200) score += 1;
 
     // 2. Section heading count — scan raw text directly for any known heading
-    //    rather than relying on parsed structured data which may have missed some
     const headingPatterns = [
       /^(education|academic background)$/i,
       /^(experience|work experience|employment|work history|employment history)$/i,
@@ -287,11 +276,9 @@ class ATSCalculator {
   }
 
   /**
-   * Experience quality bonus (5 points max).
-   * For students: projects count as experience if they are substantive.
-   * For professionals: professional roles score higher.
+   * Experience / project depth (15 points max).
    */
-  calculateExperienceBonus(parsedData) {
+  calculateExperienceDepth(parsedData) {
     const structured = parsedData.structured || {};
     const text       = (parsedData.raw_text || '').toLowerCase();
 
@@ -311,14 +298,14 @@ class ATSCalculator {
     const hasProfessional  = /full.?time|employed|position at|role at|worked at|working at/.test(text);
     const hasAchievements  = /icpc|hackathon|leetcode|codeforces|codechef|top \d+%|ranking|rank \d+/.test(text);
 
-    // Professional experience — max 5
-    if (profCount >= 2 || hasProfessional) return 5;
-    if (profCount >= 1 || hasInternship)   return 4;
+    // Professional experience — max 15
+    if (profCount >= 2 || hasProfessional) return 15;
+    if (profCount >= 1 || hasInternship)   return 12;
 
     // Student / fresher — reward strong projects + achievements
-    if (projCount >= 3 && hasAchievements) return 4;
-    if (projCount >= 2 || hasAchievements) return 3;
-    if (projCount >= 1)                    return 2;
+    if (projCount >= 3 && hasAchievements) return 12;
+    if (projCount >= 2 || hasAchievements) return 9;
+    if (projCount >= 1)                    return 6;
 
     return 0;
   }
@@ -331,10 +318,15 @@ class ATSCalculator {
       return { totalYears: 0, roleCount: 0, hasGaps: false, averageTenure: 0, roles: [] };
     }
 
+    // Only real jobs/internships count toward a timeline — competitive
+    // programming entries (type: 'competitive') don't have a duration and
+    // aren't a "role", so counting them in roleCount inflated it.
+    const professionalRoles = experience.filter(e => e.type !== 'competitive');
+
     let totalMonths = 0;
     const roles = [];
 
-    experience.forEach(exp => {
+    professionalRoles.forEach(exp => {
       if (exp.duration) {
         const years = this.extractYearsFromDuration(exp.duration);
         totalMonths += years * 12;
@@ -344,23 +336,64 @@ class ATSCalculator {
 
     return {
       totalYears: Math.round((totalMonths / 12) * 10) / 10,
-      roleCount: experience.length,
+      roleCount: professionalRoles.length,
       hasGaps: false,
-      averageTenure: roles.length > 0 ? Math.round((totalMonths / roles.length) * 10) / 120 : 0,
+      averageTenure: roles.length > 0 ? Math.round((totalMonths / roles.length / 12) * 10) / 10 : 0,
       roles
     };
   }
 
   /**
-   * Extract years from duration string
+   * Extract years from a duration string.
+   *
+   * Handles two formats:
+   *  1. Explicit phrasing — "2 years 3 months", "18 months"
+   *  2. Date ranges — "Jan 2023 – Aug 2023", "2021 - Present", "06/2022 - 08/2023"
+   *     (this is what resumeParserEnhanced.js's extractExperience() actually
+   *     produces, so without (2) this always returned 0 for real resumes —
+   *     the literal-phrasing check almost never matches a real date range)
    */
   extractYearsFromDuration(duration) {
-    const yearMatch  = duration.match(/(\d+)\s*(?:year|yr)/i);
-    const monthMatch = duration.match(/(\d+)\s*(?:month|mo)/i);
-    let years  = yearMatch  ? parseInt(yearMatch[1])  : 0;
-    const months = monthMatch ? parseInt(monthMatch[1]) : 0;
-    years += months / 12;
-    return years;
+    if (!duration || typeof duration !== 'string') return 0;
+
+    // 1. Explicit "X years Y months" phrasing
+    const yearMatch  = duration.match(/(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\b/i);
+    const monthMatch = duration.match(/(\d+)\s*(?:months?|mos?)\b/i);
+    if (yearMatch || monthMatch) {
+      const years  = yearMatch  ? parseFloat(yearMatch[1]) : 0;
+      const months = monthMatch ? parseInt(monthMatch[1], 10) : 0;
+      return years + months / 12;
+    }
+
+    // 2. Date range: "Mon YYYY – Mon YYYY", "YYYY - Present", "MM/YYYY - MM/YYYY"
+    const monthNamePattern = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*';
+    const rangeRegex = new RegExp(
+      `(?:(${monthNamePattern})[a-z]*\\.?\\s+|(\\d{1,2})\\s*[\\/\\-]\\s*)?(\\d{4})` +
+      `\\s*(?:[-–—]|to)\\s*` +
+      `(?:(${monthNamePattern})[a-z]*\\.?\\s+|(\\d{1,2})\\s*[\\/\\-]\\s*)?(\\d{4}|present|current|ongoing|now)`,
+      'i'
+    );
+    const m = duration.match(rangeRegex);
+    if (!m) return 0;
+
+    const [, startMonthName, startMonthNum, startYearStr, endMonthName, endMonthNum, endYearStr] = m;
+
+    const resolveMonth = (name, num) => {
+      if (name) return this.monthNames.indexOf(name.toLowerCase().slice(0, 3));
+      if (num)  return Math.min(Math.max(parseInt(num, 10) - 1, 0), 11);
+      return 0; // default to January when only a year is given
+    };
+
+    const startYear  = parseInt(startYearStr, 10);
+    const startMonth = resolveMonth(startMonthName, startMonthNum);
+
+    const endIsPresent = /present|current|ongoing|now/i.test(endYearStr);
+    const now = new Date();
+    const endYear  = endIsPresent ? now.getFullYear() : parseInt(endYearStr, 10);
+    const endMonth = endIsPresent ? now.getMonth() : resolveMonth(endMonthName, endMonthNum);
+
+    const totalMonths = (endYear - startYear) * 12 + (endMonth - startMonth);
+    return Math.max(totalMonths, 0) / 12;
   }
 }
 

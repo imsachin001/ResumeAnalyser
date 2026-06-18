@@ -162,7 +162,7 @@ const Analysis = ({ data, onBackToHome }) => {
   const { getToken } = useAuth();
   const { user } = useUser();
   const [selectedSkillCategory, setSelectedSkillCategory] = useState('all');
-  const [animatedScores, setAnimatedScores] = useState({ ats: 0, match: 0 });
+  const [animatedScores, setAnimatedScores] = useState({ ats: 0, match: 0, resume: 0 });
   const [isExporting, setIsExporting] = useState(false);
   const [shareableLink, setShareableLink] = useState('');
   const [expandedRole, setExpandedRole] = useState(null);
@@ -177,6 +177,8 @@ const Analysis = ({ data, onBackToHome }) => {
   const {
     match_score = 0,
     ats_score = 0,
+    resume_quality_score = 0,
+    resume_quality_breakdown = {},
     ats_breakdown = {},
     ats_improvements = [],
     matched_skills = [],
@@ -208,17 +210,18 @@ const Analysis = ({ data, onBackToHome }) => {
       
       setAnimatedScores({
         ats: Math.floor((ats_score || 0) * progress),
-        match: Math.floor((match_score || 0) * progress)
+        match: Math.floor((match_score || 0) * progress),
+        resume: Math.floor((resume_quality_score || 0) * progress)
       });
 
       if (currentStep >= steps) {
         clearInterval(interval);
-        setAnimatedScores({ ats: ats_score || 0, match: match_score || 0 });
+        setAnimatedScores({ ats: ats_score || 0, match: match_score || 0, resume: resume_quality_score || 0 });
       }
     }, stepDuration);
 
     return () => clearInterval(interval);
-  }, [ats_score, match_score]);
+  }, [ats_score, match_score, resume_quality_score]);
 
   // Get score color based on value
   const getScoreColor = (score) => {
@@ -606,100 +609,214 @@ const Analysis = ({ data, onBackToHome }) => {
 
         {/* Interactive Score Visualization with Circular Progress */}
         <div className="scores-section">
-          {ats_score !== undefined && (
-            <div className="score-card">
-              <div className="score-circle-container">
-                <svg className="score-circle" viewBox="0 0 200 200">
-                  <circle
-                    className="score-circle-bg"
-                    cx="100"
-                    cy="100"
-                    r="85"
-                    fill="none"
-                    stroke="#e5e7eb"
-                    strokeWidth="15"
-                  />
-                  <circle
-                    className="score-circle-progress"
-                    cx="100"
-                    cy="100"
-                    r="85"
-                    fill="none"
-                    stroke={getScoreColor(ats_score)}
-                    strokeWidth="15"
-                    strokeDasharray={`${(animatedScores.ats / 100) * 534} 534`}
-                    strokeLinecap="round"
-                    transform="rotate(-90 100 100)"
-                  />
-                  <text x="100" y="95" textAnchor="middle" className="score-text-large">
-                    {animatedScores.ats}%
-                  </text>
-                  <text x="100" y="115" textAnchor="middle" className="score-text-small">
-                    ATS Score
-                  </text>
-                </svg>
-              </div>
-              <div className="score-tooltip">
-                <p>Based on keyword density, formatting, and structure</p>
-                {ats_breakdown && Object.keys(ats_breakdown).length > 0 && (
-                  <div className="ats-breakdown">
-                    <h4>Breakdown:</h4>
-                    <ul>
-                      {ats_breakdown.contact && <li>Contact: {ats_breakdown.contact}/15</li>}
-                      {ats_breakdown.sections && <li>Sections: {ats_breakdown.sections}/20</li>}
-                      {ats_breakdown.keywords && <li>Keywords: {ats_breakdown.keywords}/40</li>}
-                      {ats_breakdown.actionVerbs && <li>Action Verbs: {ats_breakdown.actionVerbs}/10</li>}
-                      {ats_breakdown.formatting && <li>Formatting: {ats_breakdown.formatting}/10</li>}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-          {match_score !== undefined && (
-            <div className="score-card">
-              <div className="score-circle-container">
-                <svg className="score-circle" viewBox="0 0 200 200">
-                  <circle
-                    className="score-circle-bg"
-                    cx="100"
-                    cy="100"
-                    r="85"
-                    fill="none"
-                    stroke="#e5e7eb"
-                    strokeWidth="15"
-                  />
-                  <circle
-                    className="score-circle-progress"
-                    cx="100"
-                    cy="100"
-                    r="85"
-                    fill="none"
-                    stroke={getScoreColor(match_score)}
-                    strokeWidth="15"
-                    strokeDasharray={`${(animatedScores.match / 100) * 534} 534`}
-                    strokeLinecap="round"
-                    transform="rotate(-90 100 100)"
-                  />
-                  <text x="100" y="95" textAnchor="middle" className="score-text-large">
-                    {animatedScores.match}%
-                  </text>
-                  <text x="100" y="115" textAnchor="middle" className="score-text-small">
-                    Job Match
-                  </text>
-                </svg>
-              </div>
-              <div className="score-tooltip">
-                <p>Based on skill match and experience alignment</p>
-                {section_completeness && (
-                  <p className="completeness">Section Completeness: {section_completeness}%</p>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
 
-        {/* ATS Improvement Cards */}
+    {/* Resume Quality Score */}
+      {resume_quality_score !== undefined && (
+        <div className="score-card">
+          <div className="score-circle-container">
+            <svg className="score-circle" viewBox="0 0 200 200">
+              <circle
+                className="score-circle-bg"
+                cx="100"
+                cy="100"
+                r="85"
+                fill="none"
+                stroke="#e5e7eb"
+                strokeWidth="15"
+              />
+              <circle
+                className="score-circle-progress"
+                cx="100"
+                cy="100"
+                r="85"
+                fill="none"
+                stroke={getScoreColor(resume_quality_score)}
+                strokeWidth="15"
+                strokeDasharray={`${(animatedScores.resume / 100) * 534} 534`}
+                strokeLinecap="round"
+                transform="rotate(-90 100 100)"
+              />
+              <text x="100" y="95" textAnchor="middle" className="score-text-large">
+                {animatedScores.resume}%
+              </text>
+              <text x="100" y="115" textAnchor="middle" className="score-text-small">
+                Resume Quality
+              </text>
+            </svg>
+          </div>
+
+          <div className="score-tooltip">
+            <p>Based on structure, readability, formatting and impact.</p>
+          </div>
+        </div>
+      )}
+
+
+      {/* Job Match Score */}
+      {match_score !== undefined && (
+        <div className="score-card">
+          <div className="score-circle-container">
+            <svg className="score-circle" viewBox="0 0 200 200">
+              <circle
+                className="score-circle-bg"
+                cx="100"
+                cy="100"
+                r="85"
+                fill="none"
+                stroke="#e5e7eb"
+                strokeWidth="15"
+              />
+              <circle
+                className="score-circle-progress"
+                cx="100"
+                cy="100"
+                r="85"
+                fill="none"
+                stroke={getScoreColor(match_score)}
+                strokeWidth="15"
+                strokeDasharray={`${(animatedScores.match / 100) * 534} 534`}
+                strokeLinecap="round"
+                transform="rotate(-90 100 100)"
+              />
+              <text x="100" y="95" textAnchor="middle" className="score-text-large">
+                {animatedScores.match}%
+              </text>
+              <text x="100" y="115" textAnchor="middle" className="score-text-small">
+                Job Match
+              </text>
+            </svg>
+          </div>
+
+          <div className="score-tooltip">
+            <p>Based on job description skills, experience and domain alignment.</p>
+          </div>
+        </div>
+      )}
+
+
+      {/* Overall ATS Compatibility */}
+      {ats_score !== undefined && (
+        <div className="score-card">
+          <div className="score-circle-container">
+            <svg className="score-circle" viewBox="0 0 200 200">
+              <circle
+                className="score-circle-bg"
+                cx="100"
+                cy="100"
+                r="85"
+                fill="none"
+                stroke="#e5e7eb"
+                strokeWidth="15"
+              />
+              <circle
+                className="score-circle-progress"
+                cx="100"
+                cy="100"
+                r="85"
+                fill="none"
+                stroke={getScoreColor(ats_score)}
+                strokeWidth="15"
+                strokeDasharray={`${(animatedScores.ats / 100) * 534} 534`}
+                strokeLinecap="round"
+                transform="rotate(-90 100 100)"
+              />
+              <text x="100" y="95" textAnchor="middle" className="score-text-large">
+                {animatedScores.ats}%
+              </text>
+              <text x="100" y="115" textAnchor="middle" className="score-text-small">
+                ATS Compatibility
+              </text>
+            </svg>
+          </div>
+
+          <div className="score-tooltip">
+            <p>Overall score combining resume quality and job relevance.</p>
+          </div>
+        </div>
+      )}
+
+    </div>
+
+        {/* Score Breakdown Details */}
+        <div className="score-breakdown-section">
+          {/* Resume Quality Breakdown */}
+          <div className="breakdown-card">
+            <h3>📋 Resume Quality Breakdown <span className="breakdown-total">({resume_quality_score}/100)</span></h3>
+            <div className="breakdown-rows">
+              {[
+                { label: 'Contact',      key: 'contact',        max: 10 },
+                { label: 'Sections',     key: 'sections',       max: 15 },
+                { label: 'Formatting',   key: 'formatting',     max: 10 },
+                { label: 'Action Verbs', key: 'actionVerbs',    max: 10 },
+                { label: 'Experience',   key: 'experienceDepth',max: 15 },
+              ].map(({ label, key, max }) => {
+                const raw   = resume_quality_breakdown[key] ?? 0;
+                const pct   = Math.round((raw / max) * 100);
+                return (
+                  <div key={key} className="breakdown-row">
+                    <span className="breakdown-label">{label}</span>
+                    <div className="breakdown-bar-wrap">
+                      <div
+                        className="breakdown-bar-fill"
+                        style={{ width: `${pct}%`, background: getScoreGradient(pct) }}
+                      />
+                    </div>
+                    <span className="breakdown-score">{raw}/{max}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* JD Match Breakdown */}
+          <div className="breakdown-card">
+            <h3>🎯 JD Match Breakdown <span className="breakdown-total">({match_score}/100)</span></h3>
+            <div className="breakdown-rows">
+              {[
+                { label: 'Skills Match',  pct: Math.min(Math.round((match_score * 0.625)), 100), display: '25 pts weight' },
+                { label: 'Domain Match',  pct: Math.min(Math.round((match_score * 0.25)),  100), display: '10 pts weight' },
+                { label: 'Keywords',      pct: Math.min(Math.round((match_score * 0.125)), 100), display: '5 pts weight'  },
+              ].map(({ label, pct, display }) => (
+                <div key={label} className="breakdown-row">
+                  <span className="breakdown-label">{label}</span>
+                  <div className="breakdown-bar-wrap">
+                    <div
+                      className="breakdown-bar-fill"
+                      style={{ width: `${pct}%`, background: getScoreGradient(pct) }}
+                    />
+                  </div>
+                  <span className="breakdown-score">{display}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ATS Formula */}
+          <div className="breakdown-card formula-card">
+            <h3>🧮 ATS Compatibility Score</h3>
+            <div className="formula-line">
+              <span className="formula-term">
+                <span className="formula-value" style={{ color: getScoreColor(resume_quality_score) }}>{resume_quality_score}</span>
+                <span className="formula-label">Resume Quality</span>
+              </span>
+              <span className="formula-op">×&nbsp;60%</span>
+              <span className="formula-op">+</span>
+              <span className="formula-term">
+                <span className="formula-value" style={{ color: getScoreColor(match_score) }}>{match_score}</span>
+                <span className="formula-label">JD Match</span>
+              </span>
+              <span className="formula-op">×&nbsp;40%</span>
+              <span className="formula-op">=</span>
+              <span className="formula-term formula-result">
+                <span className="formula-value" style={{ color: getScoreColor(ats_score) }}>{ats_score}</span>
+                <span className="formula-label">ATS Score</span>
+              </span>
+            </div>
+            <p className="formula-note">
+              A strong resume with mismatched skills gives a moderate final score — exactly the intended behaviour.
+            </p>
+          </div>
+        </div>
         {ats_improvements && ats_improvements.length > 0 && (
           <div className="ats-improvements-section">
             <h2>🧭 ATS Improvement Breakdown</h2>
@@ -783,12 +900,16 @@ const Analysis = ({ data, onBackToHome }) => {
           <div className="suggested-roles-section">
             <h2>🎯 Suggested Job Roles</h2>
             <div className="roles-grid">
-              {suggested_roles.map((role, index) => {
-                const matchPercentage = Math.max(95 - (index * 8), 60);
+              {suggested_roles.map((roleObj, index) => {
+                // role can be a plain string OR an object {role, fit_score, reasoning}
+                const roleName = typeof roleObj === 'string' ? roleObj : (roleObj.role || String(roleObj));
+                const matchPercentage = typeof roleObj === 'object' && roleObj.fit_score != null
+                  ? roleObj.fit_score
+                  : Math.max(95 - (index * 8), 60);
                 return (
                   <RoleCard
                     key={index}
-                    role={role}
+                    role={roleName}
                     index={index}
                     matchPercentage={matchPercentage}
                     isExpanded={expandedRole === index}
