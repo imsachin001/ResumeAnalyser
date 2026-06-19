@@ -227,7 +227,7 @@ RESPONSE FORMAT — return ONLY valid JSON, no markdown:
   "strengths": ["3–5 key strengths"],
   "weaknesses": ["2–3 constructive improvement areas phrased positively"],
   "suggested_roles": [
-    { "role": "role name", "fit_score": <0-100, how well THIS resume currently fits this specific role>, "reasoning": "one short sentence" }
+    { "role": "role name", "fit_score": <0-95, how well THIS resume currently fits this specific role>, "reasoning": "one short sentence" }
   ],
   "summary": "2–3 sentence professional summary",
   "experience_level": "entry|mid|senior",
@@ -241,6 +241,7 @@ QUALITY RULES:
 - Missing skills must be high-impact for THIS domain only.
 - Recommendations must be actionable and specific to what is already in the resume.
 - Each suggested role's fit_score must be internally consistent — a role you also describe as a poor or partial fit must NOT receive a high fit_score.
+- fit_score values must never reach 100 — cap every fit_score at 95, even for a seemingly perfect match, since no real-world fit is ever absolute.
 - PROVIDE ONLY THE JSON. NO ADDITIONAL TEXT OR MARKDOWN.`;
   }
 
@@ -334,7 +335,7 @@ RESPONSE FORMAT — ONLY valid JSON, no markdown:
   "strengths": ["3–5 resume strengths relative to this JD"],
   "weaknesses": ["2–3 resume gaps relative to this JD, phrased constructively"],
   "suggested_roles": [
-    { "role": "role name (the literal JD role and/or close alternatives)", "fit_score": <0-100>, "reasoning": "one short sentence" }
+    { "role": "role name (the literal JD role and/or close alternatives)", "fit_score": <0-95>, "reasoning": "one short sentence" }
   ],
   "summary": "2–3 sentence evaluation of fit for this specific JD",
   "experience_level": "entry|mid|senior",
@@ -346,7 +347,8 @@ CRITICAL RULES:
 - missing_skills MUST come from the JD only — do not invent generic gaps.
 - recommendations MUST reference specific JD requirements — no generic advice.
 - match_score MUST be calculated using Step 3 formula — do not guess.
-- The fit_score for the literal JD role MUST be consistent with match_score (within ~10 points). If the resume is a weak or significant mismatch for the JD, that role's fit_score must be low too — never describe a role as a mismatch in your reasoning while giving it a high fit_score.
+- The fit_score for the literal JD role MUST be internally consistent with your own analysis above — if you described the resume as a weak or significant mismatch for the JD in your reasoning, that role's fit_score must be low too. Never describe a role as a mismatch while giving it a high fit_score, and never call it a strong fit while giving it a low fit_score.
+- fit_score values must never reach 100 — cap every fit_score at 95, even for a seemingly perfect match, since no real-world fit is ever absolute.
 - PROVIDE ONLY THE JSON. NO EXTRA TEXT OR MARKDOWN.`;
   }
 
@@ -397,6 +399,7 @@ CRITICAL RULES:
       const rawText  = response.text();
 
       let analysisData;
+      let parseFailed = false;
       try {
         const cleaned = rawText.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
         analysisData  = JSON.parse(cleaned);
@@ -404,6 +407,7 @@ CRITICAL RULES:
         console.error('JSON parse error:', parseErr.message);
         console.log('Raw Gemini response:', rawText.slice(0, 500));
         analysisData = this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription);
+        parseFailed = true;
       }
 
       // Step 5: ATS improvement cards (Resume Quality areas only — Contact,
@@ -418,11 +422,47 @@ CRITICAL RULES:
         atsImprovements = this.createFallbackAtsImprovements(resumeQuality, detectedDomain);
       }
 
-      // Step 6: Compute match_score ourselves — never trust Gemini's number
-      const { match_score, _debug } = this.computeMatchScore(
-        parsedData, detectedDomain, jobDescription, hasJD
-      );
-      console.log('🎯 Match score computed:', match_score, _debug);
+      // Step 6: Derive match_score from Gemini's own suggested_roles
+      // fit_score values, instead of our rule-based computeMatchScore().
+      //
+      // WHY: computeMatchScore() is a blunt keyword-overlap calculation —
+      // it consistently under-scores resumes even for their OWN domain,
+      // because exact keyword matching misses synonyms/phrasing/implied
+      // skills that Gemini already accounts for when it scores each
+      // suggested role. Gemini's per-role fit_score (visible to the user
+      // in the Suggested Job Roles section) was always the more accurate,
+      // better-calibrated number — we now make the headline match_score
+      // consistent with what the user already sees there, instead of
+      // showing two different numbers for the same thing.
+      //
+      // The "primary" role is the literal JD role match when a JD was
+      // given (always Gemini's first suggested_roles entry per the JD
+      // prompt's instructions), or the top domain role otherwise.
+      //
+      // If JSON parsing failed above, analysisData already came from
+      // createEnhancedFallbackAnalysis(), which builds match_score and
+      // suggested_roles as an already-consistent pair — re-deriving here
+      // would just redundantly reprocess the same numbers.
+      let match_score;
+      let _debug = {};
+
+      if (parseFailed) {
+        match_score = analysisData.match_score;
+        _debug = { source: 'fallback_analysis_passthrough' };
+      } else {
+        const sanitizedRoles = this.sanitizeSuggestedRoles(analysisData.suggested_roles);
+        if (sanitizedRoles.length > 0) {
+          match_score = sanitizedRoles[0].fit_score;
+          _debug = { source: 'gemini_fit_score', primaryRole: sanitizedRoles[0].role };
+        } else {
+          // Gemini returned no usable roles — use our rule-based calc
+          const computed = this.computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD);
+          match_score = Math.min(computed.match_score, 95);
+          _debug = { source: 'computeMatchScore_fallback', ...computed._debug };
+        }
+        analysisData.suggested_roles = sanitizedRoles;
+      }
+      console.log('🎯 Match score (from Gemini fit_score):', match_score, _debug);
 
       // Step 7: Build experience summary label
       const structured    = parsedData.structured || {};
@@ -443,7 +483,7 @@ CRITICAL RULES:
       // Step 9: Merge — our computed values override Gemini where needed
       return {
         ...analysisData,
-        match_score,                              // Job Match — OUR calculation, not Gemini's
+        match_score,                              // Job Match — derived from Gemini's own fit_score (see Step 6)
         resume_quality_score:     resumeQuality.total,
         resume_quality_breakdown: resumeQuality.breakdown,
         ats_score:                atsCompatibility, // combined compatibility, not a raw rule-based score anymore
@@ -564,8 +604,12 @@ RESPONSE — ONLY valid JSON:
     const domainSkills   = detectedDomain.template.important_skills || [];
     const matchedDomain  = domainSkills.filter(s => resumeText.toLowerCase().includes(s.toLowerCase()));
 
-    // Compute match score using structured signals (same as Gemini path)
-    const { match_score } = this.computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD);
+    // Compute match score using structured signals (same as Gemini path).
+    // This is the ONLY path where computeMatchScore() still drives the
+    // headline number — there's no Gemini output to derive a better one
+    // from when there's no API key. Capped at 95 like every other path.
+    let { match_score } = this.computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD);
+    match_score = Math.min(match_score, 95);
 
     // Combine Resume Quality + Job Match into the final ATS Compatibility
     // score — same 60/40 weighting as the Gemini path, so the number means
@@ -633,9 +677,30 @@ RESPONSE — ONLY valid JSON:
   buildFallbackSuggestedRoles(detectedDomain, matchScore) {
     return detectedDomain.template.suggested_roles.slice(0, 4).map((role, i) => ({
       role,
-      fit_score: Math.max(matchScore - i * 8, 10),
+      fit_score: Math.min(Math.max(matchScore - i * 8, 10), 95),
       reasoning: `Estimated from overlap with core ${detectedDomain.template.name} skills.`
     }));
+  }
+
+  /**
+   * Clamp every suggested role's fit_score into [10, 95] and drop malformed
+   * entries. No resume is ever a literal 100% fit for a role, so 95 is the
+   * ceiling everywhere this data is produced (Gemini path + fallback path).
+   */
+  sanitizeSuggestedRoles(roles) {
+    if (!Array.isArray(roles)) return [];
+    return roles
+      .filter(r => r && (r.role || typeof r === 'string'))
+      .map(r => {
+        const role   = typeof r === 'string' ? r : r.role;
+        const rawFit = typeof r === 'object' ? r.fit_score : undefined;
+        const fit_score = Math.min(Math.max(Math.round(Number(rawFit) || 50), 10), 95);
+        return {
+          role,
+          fit_score,
+          reasoning: (typeof r === 'object' && r.reasoning) || ''
+        };
+      });
   }
 
   /**
