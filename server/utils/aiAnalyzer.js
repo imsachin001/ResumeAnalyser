@@ -2,29 +2,6 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const domainTemplates = require('./domainTemplates');
 const atsCalculator   = require('./atsCalculator');
 
-/**
- * AIAnalyzer
- *
- * FIXES:
- * 1. JD-specific analysis: when a JD is provided, a dedicated prompt
- *    (createJDMatchPrompt) is used instead of the generic domain prompt.
- *    It extracts every requirement from the JD, cross-references them
- *    explicitly against the resume, and builds missing_skills /
- *    recommendations from ONLY what the JD asks for.
- *
- * 2. No-JD path: createDomainAwarePrompt is used unchanged — works as before.
- *
- * 3. ATS score is always calculated by atsCalculator (rule-based, consistent).
- *    Gemini is NOT asked to calculate ATS — it was unreliable.
- *
- * 4. analyzeResume() now routes correctly: JD present → JD prompt,
- *    no JD → domain prompt.
- *
- * 5. createFallbackStructure() now reads arrays from structured/sections
- *    correctly (parser fix means these are real arrays now).
- *
- * 6. Hardcoded MERN default removed from the no-JD path.
- */
 class AIAnalyzer {
   constructor() {
     // Universal tech dictionary (always used for tech resumes)
@@ -43,7 +20,7 @@ class AIAnalyzer {
       'Pandas', 'NumPy', 'Recharts', 'D3.js', 'Sass', 'Webpack', 'Heroku', 'Vercel', 'Netlify'
     ];
 
-    // Non-tech domain skill dictionaries (keyed by domainTemplates domain key)
+    // Non-tech domain skill dictionaries
     this.domainSkillDictionaries = {
       marketing: [
         'SEO', 'SEM', 'Google Ads', 'Facebook Ads', 'Content Marketing', 'Email Marketing',
@@ -120,7 +97,7 @@ class AIAnalyzer {
       ]
     };
 
-    // Universal soft skills (always appended to the dictionary)
+    // Universal soft skills
     this.softSkillsDictionary = [
       'Communication', 'Leadership', 'Teamwork', 'Problem Solving', 'Time Management',
       'Presentation Skills', 'Negotiation', 'Conflict Resolution', 'Adaptability',
@@ -177,10 +154,6 @@ class AIAnalyzer {
   // PROMPT BUILDERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Prompt used when NO job description is provided.
-   * Evaluates the resume against its detected domain.
-   */
   createDomainAwarePrompt(parsedData, detectedDomain) {
     const structuredData = this.createFallbackStructure(parsedData);
     const domainInfo     = detectedDomain.template;
@@ -189,151 +162,100 @@ class AIAnalyzer {
 
 DETECTED DOMAIN: ${detectedDomain.name}
 This resume appears to be for: ${detectedDomain.name}
-Matched domain keywords: ${detectedDomain.matchedKeywords.slice(0, 10).join(', ')}
 
 DOMAIN-SPECIFIC IMPORTANT SKILLS:
 ${domainInfo.important_skills.join(', ')}
 
-SUGGESTED ROLES FOR THIS DOMAIN:
-${domainInfo.suggested_roles.join(', ')}
-
 RESUME DATA (Structured JSON):
 ${JSON.stringify(structuredData, null, 2)}
 
-NO JOB DESCRIPTION PROVIDED — evaluate as a general ${domainInfo.name} candidate.
-
 TASK: Analyze this resume for ${domainInfo.name} roles using domain-specific criteria.
 
-Job Match Score (match against domain standards, 100 points total):
-Step 1 – Skills alignment: 50 pts
-  Ratio: (domain skills found in resume / total important domain skills) × 50
-  Domain important skills: ${domainInfo.important_skills.join(', ')}
+STEP 1 — Skill Extraction
+Extract the hard skills explicitly found in the resume.
+CRITICAL: ONLY list skills that physically exist in the resume text. Do NOT hallucinate skills that you think the candidate *might* know based on their domain.
 
-Step 2 – Projects/Experience relevance: 30 pts
-  Projects clearly match domain: 30 | Partially relevant: 20 | Some relevance: 10 | None: 0
-
-Step 3 – Educational background: 10 pts
-  Relevant degree/certification: 10 | Related background: 7 | Self-taught: 5
-
-Step 4 – Professional presence (GitHub/LinkedIn/Portfolio + certs): 10 pts
-  All three: 10 | Two: 7 | One: 4 | None: 0
+STEP 2 — Holistic Match Scoring
+Provide a dynamic Job Match Score (0-100) assessing how well this candidate fits a generic ${domainInfo.name} role.
+- Use your expert judgment based on semantic depth, transferrable skills, and project quality.
+- DO NOT use a rigid calculation. A candidate with great core logic but missing a specific tool can still score 75+. A total mismatch should score under 40.
 
 RESPONSE FORMAT — return ONLY valid JSON, no markdown:
 {
-  "match_score": <0–100>,
-  "matched_skills": ["skills from resume matching domain requirements"],
+  "match_score": <0–100, dynamic integer>,
+  "matched_skills": ["ONLY skills explicitly found in the resume"],
   "missing_skills": ["3–5 HIGH-IMPACT domain skills absent from resume"],
-  "recommendations": ["4–6 SPECIFIC, ACTIONABLE improvements for this domain"],
+  "recommendations": ["4–6 SPECIFIC, ACTIONABLE improvements"],
   "strengths": ["3–5 key strengths"],
   "weaknesses": ["2–3 constructive improvement areas phrased positively"],
   "suggested_roles": [
-    { "role": "role name", "fit_score": <0-95, how well THIS resume currently fits this specific role>, "reasoning": "one short sentence" }
+    { "role": "role name", "fit_score": <0-95>, "reasoning": "one short sentence" }
   ],
   "summary": "2–3 sentence professional summary",
   "experience_level": "entry|mid|senior",
   "key_achievements": ["2–4 notable achievements from the resume"],
-  "top_skills": ["top 5 most relevant skills for ${domainInfo.name}"]
+  "top_skills": ["top 5 most relevant skills actually found in the resume"]
 }
 
 QUALITY RULES:
-- Be domain-specific. Do NOT give generic software advice for non-tech domains.
-- Matched skills must actually appear in the resume.
-- Missing skills must be high-impact for THIS domain only.
-- Recommendations must be actionable and specific to what is already in the resume.
-- Each suggested role's fit_score must be internally consistent — a role you also describe as a poor or partial fit must NOT receive a high fit_score.
-- fit_score values must never reach 100 — cap every fit_score at 95, even for a seemingly perfect match, since no real-world fit is ever absolute.
+- match_score MUST be an intuitive, AI-assessed evaluation, not rigid math.
+- matched_skills MUST be derived strictly from the candidate's resume.
+- fit_score values must never reach 100 — cap every fit_score at 95.
 - PROVIDE ONLY THE JSON. NO ADDITIONAL TEXT OR MARKDOWN.`;
   }
 
-  /**
-   * Prompt used when a Job Description IS provided.
-   *
-   * Explicitly extracts every requirement from the JD and compares each one
-   * against the resume. missing_skills and recommendations are JD-driven only.
-   */
   createJDMatchPrompt(parsedData, jobDescription, detectedDomain) {
     const structuredData = this.createFallbackStructure(parsedData);
-    const domainInfo     = detectedDomain.template;
 
-    return `You are a senior technical recruiter and ATS specialist. Your task is to evaluate how well this resume matches the provided Job Description.
+    return `You are a senior technical recruiter and ATS specialist. Your task is to evaluate how well this resume aligns with the provided Job Description (JD).
 
 ═══════════════════════════════════════
-JOB DESCRIPTION (read every word carefully):
+JOB DESCRIPTION:
 ═══════════════════════════════════════
 ${jobDescription.trim()}
 
 ═══════════════════════════════════════
-RESUME DATA (Structured JSON):
+RESUME DATA:
 ═══════════════════════════════════════
 ${JSON.stringify(structuredData, null, 2)}
-
-DETECTED DOMAIN: ${detectedDomain.name}
 
 ═══════════════════════════════════════
 STEP-BY-STEP ANALYSIS INSTRUCTIONS
 ═══════════════════════════════════════
 
-STEP 1 — Extract JD requirements
-Read the Job Description and list:
-  a) Required technical skills / tools / languages mentioned
-  b) Required experience (years, domains, types of work)
-  c) Required education / certifications
-  d) Preferred / nice-to-have skills
-  e) Soft skills explicitly mentioned
+STEP 1 — Extract JD Requirements
+Identify the core technical skills, experience, and nice-to-haves explicitly requested in the JD.
 
-STEP 2 — Cross-reference with resume
-For EACH item in Step 1:
-  - Mark as MATCHED if the resume clearly demonstrates it (in skills, projects, experience, or education)
-  - Mark as MISSING if it is absent or barely mentioned
-  - Mark as PARTIAL if it is hinted at but not fully demonstrated
+STEP 2 — Semantic Candidate Evaluation
+Cross-reference the JD requirements against the candidate's resume.
+CRITICAL HALLUCINATION GUARD: When populating 'matched_skills', you MUST ONLY list skills that are EXPLICITLY WRITTEN in the resume data. Do NOT copy a skill from the JD into the matched_skills array if the candidate did not include it.
 
-STEP 3 — Score calculation
-
-Job Match Score (total 100):
-  Required technical skills match: (matched_required / total_required) × 50
-  Projects / experience relevance to JD role:
-    Clearly relevant projects/experience: 30 | Partial: 20 | Some: 10 | None: 0
-  Education / certifications meet JD requirements:
-    Fully met: 10 | Partially met: 6 | Not met: 2
-  Soft skills + years of experience match:
-    Strong match: 10 | Moderate: 6 | Weak: 2
-
-EXPECTED RANGES:
-  Strong candidate  (most JD requirements met):  70–90
-  Partial match     (half of JD requirements):   45–69
-  Weak match        (few requirements met):      20–44
-
-STEP 4 — Build missing_skills
-List ONLY skills/technologies/certifications that:
-  1. Are explicitly required or strongly preferred in the JD, AND
-  2. Are absent or insufficient in the resume.
-Do NOT list skills the JD doesn't mention.
-
-STEP 5 — Build recommendations
-Each recommendation must:
-  1. Reference a specific JD requirement that is unmet or weak.
-  2. Suggest a concrete action (course, project, wording change).
-  3. Be achievable in under 3 months.
+STEP 3 — Dynamic Match Scoring
+Provide a holistic Job Match Score (0-100). Do NOT use a rigid mathematical formula. Use your expert AI judgment:
+- 80-95: Strong semantic fit. High alignment in core skills and experience.
+- 60-79: Moderate fit. Has fundamental skills/experience, but missing some key requirements or depth.
+- 40-59: Weak fit. Lacks core experience or critical required skills, but has some basic transferrable value.
+- 0-39: Poor fit. Completely misaligned domain or experience level.
 
 ═══════════════════════════════════════
 RESPONSE FORMAT — ONLY valid JSON, no markdown:
 ═══════════════════════════════════════
 {
-  "match_score": <0–100, calculated per Step 3>,
+  "match_score": <0–100, dynamic holistic score per Step 3>,
   "jd_requirements_extracted": {
-    "required_skills": ["every required skill/tool extracted from JD"],
+    "required_skills": ["every required skill extracted from JD"],
     "preferred_skills": ["nice-to-have skills from JD"],
     "experience_required": "e.g. 2+ years in backend development",
     "education_required": "e.g. B.Tech in CS or equivalent",
-    "soft_skills": ["communication", "teamwork", ...]
+    "soft_skills": ["communication", "teamwork"]
   },
   "matched_requirements": ["JD requirements clearly met by the resume"],
   "partial_requirements": ["JD requirements partially met"],
-  "matched_skills": ["skills from resume that appear in JD requirements"],
+  "matched_skills": ["ONLY JD-required skills actually present in the resume"],
   "missing_skills": ["JD-required skills absent from resume — max 6"],
   "recommendations": ["5–7 specific, JD-driven, actionable improvements"],
   "strengths": ["3–5 resume strengths relative to this JD"],
-  "weaknesses": ["2–3 resume gaps relative to this JD, phrased constructively"],
+  "weaknesses": ["2–3 resume gaps relative to this JD"],
   "suggested_roles": [
     { "role": "role name (the literal JD role and/or close alternatives)", "fit_score": <0-95>, "reasoning": "one short sentence" }
   ],
@@ -344,11 +266,9 @@ RESPONSE FORMAT — ONLY valid JSON, no markdown:
 }
 
 CRITICAL RULES:
-- missing_skills MUST come from the JD only — do not invent generic gaps.
-- recommendations MUST reference specific JD requirements — no generic advice.
-- match_score MUST be calculated using Step 3 formula — do not guess.
-- The fit_score for the literal JD role MUST be internally consistent with your own analysis above — if you described the resume as a weak or significant mismatch for the JD in your reasoning, that role's fit_score must be low too. Never describe a role as a mismatch while giving it a high fit_score, and never call it a strong fit while giving it a low fit_score.
-- fit_score values must never reach 100 — cap every fit_score at 95, even for a seemingly perfect match, since no real-world fit is ever absolute.
+- matched_skills MUST NEVER contain a skill not found in the resume text.
+- match_score MUST be an intuitive AI assessment, varied and dynamic.
+- fit_score values must never reach 100 — cap every fit_score at 95.
 - PROVIDE ONLY THE JSON. NO EXTRA TEXT OR MARKDOWN.`;
   }
 
@@ -359,26 +279,14 @@ CRITICAL RULES:
   async analyzeResume(parsedData, jobDescription = '', apiKey = null) {
     const hasJD = jobDescription && jobDescription.trim().length > 2;
 
-    // Step 1: Detect domain
     const detectedDomain = domainTemplates.detectDomain(parsedData.raw_text || '');
-    console.log(`\n🎯 Domain Detection:`, {
-      domain:   detectedDomain.name,
-      score:    detectedDomain.score,
-      keywords: detectedDomain.matchedKeywords.slice(0, 5)
-    });
-
-    // Step 2: Calculate Resume Quality (always rule-based — consistent,
-    // reproducible, and deliberately domain/JD-agnostic; see atsCalculator.js)
     const resumeQuality = atsCalculator.calculateResumeQualityScore(parsedData);
-    console.log(`\n📊 Resume Quality Breakdown:`, resumeQuality);
 
-    // Step 3: Experience timeline
-    const expArray        = Array.isArray(parsedData.structured?.experience)
-                              ? parsedData.structured.experience
-                              : (Array.isArray(parsedData.experience) ? parsedData.experience : []);
+    const expArray = Array.isArray(parsedData.structured?.experience)
+      ? parsedData.structured.experience
+      : (Array.isArray(parsedData.experience) ? parsedData.experience : []);
     const experienceTimeline = atsCalculator.calculateExperienceTimeline(expArray);
 
-    // No API key → enhanced fallback
     if (!apiKey) {
       console.log('No Gemini API key — using enhanced fallback analysis');
       return this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription);
@@ -388,7 +296,6 @@ CRITICAL RULES:
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
 
-      // Step 4: Choose the right prompt based on whether JD is provided
       const prompt = hasJD
         ? this.createJDMatchPrompt(parsedData, jobDescription, detectedDomain)
         : this.createDomainAwarePrompt(parsedData, detectedDomain);
@@ -405,66 +312,56 @@ CRITICAL RULES:
         analysisData  = JSON.parse(cleaned);
       } catch (parseErr) {
         console.error('JSON parse error:', parseErr.message);
-        console.log('Raw Gemini response:', rawText.slice(0, 500));
         analysisData = this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription);
         parseFailed = true;
       }
 
-      // Step 5: ATS improvement cards (Resume Quality areas only — Contact,
-      // Sections, Formatting, Action Verbs, Experience Depth)
       let atsImprovements = [];
       try {
-        atsImprovements = await this.generateAtsImprovements(
-          parsedData, resumeQuality, detectedDomain, jobDescription, apiKey
-        );
+        atsImprovements = await this.generateAtsImprovements(parsedData, resumeQuality, detectedDomain, jobDescription, apiKey);
       } catch (e) {
         console.error('ATS improvements error:', e.message);
         atsImprovements = this.createFallbackAtsImprovements(resumeQuality, detectedDomain);
       }
 
-      // Step 6: Derive match_score from Gemini's own suggested_roles
-      // fit_score values, instead of our rule-based computeMatchScore().
-      //
-      // WHY: computeMatchScore() is a blunt keyword-overlap calculation —
-      // it consistently under-scores resumes even for their OWN domain,
-      // because exact keyword matching misses synonyms/phrasing/implied
-      // skills that Gemini already accounts for when it scores each
-      // suggested role. Gemini's per-role fit_score (visible to the user
-      // in the Suggested Job Roles section) was always the more accurate,
-      // better-calibrated number — we now make the headline match_score
-      // consistent with what the user already sees there, instead of
-      // showing two different numbers for the same thing.
-      //
-      // The "primary" role is the literal JD role match when a JD was
-      // given (always Gemini's first suggested_roles entry per the JD
-      // prompt's instructions), or the top domain role otherwise.
-      //
-      // If JSON parsing failed above, analysisData already came from
-      // createEnhancedFallbackAnalysis(), which builds match_score and
-      // suggested_roles as an already-consistent pair — re-deriving here
-      // would just redundantly reprocess the same numbers.
       let match_score;
-      let _debug = {};
-
       if (parseFailed) {
         match_score = analysisData.match_score;
-        _debug = { source: 'fallback_analysis_passthrough' };
       } else {
         const sanitizedRoles = this.sanitizeSuggestedRoles(analysisData.suggested_roles);
-        if (sanitizedRoles.length > 0) {
-          match_score = sanitizedRoles[0].fit_score;
-          _debug = { source: 'gemini_fit_score', primaryRole: sanitizedRoles[0].role };
-        } else {
-          // Gemini returned no usable roles — use our rule-based calc
-          const computed = this.computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD);
-          match_score = Math.min(computed.match_score, 95);
-          _debug = { source: 'computeMatchScore_fallback', ...computed._debug };
-        }
         analysisData.suggested_roles = sanitizedRoles;
-      }
-      console.log('🎯 Match score (from Gemini fit_score):', match_score, _debug);
 
-      // Step 7: Build experience summary label
+        if (hasJD) {
+          // When a JD is provided: Gemini's own match_score IS the JD-specific
+          // score we want. Do NOT use sanitizedRoles[0].fit_score — that's the
+          // candidate's strongest native domain role, which will be high even
+          // when the JD is for a completely different domain. For example, a
+          // Backend Dev resume vs a UX Design JD: roles[0] = Backend Dev at 90%
+          // (candidate's strength), roles[3] = UX Designer at 10% (the actual JD
+          // match) — taking roles[0] showed 90% Job Match for a completely wrong JD.
+          const geminiScore = Number(analysisData.match_score);
+          if (!isNaN(geminiScore) && geminiScore > 0) {
+            match_score = Math.min(Math.max(Math.round(geminiScore), 5), 95);
+          } else if (sanitizedRoles.length > 0) {
+            // Fallback: find the role whose name most closely matches the JD
+            // (Gemini should have put it first per prompt instructions, but if not,
+            // pick the lowest fit_score role since mismatches get listed last)
+            match_score = sanitizedRoles[0].fit_score;
+          } else {
+            const computed = this.computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD);
+            match_score = Math.min(computed.match_score, 95);
+          }
+        } else {
+          // No JD: domain-fit match — first suggested role is appropriate here
+          if (sanitizedRoles.length > 0) {
+            match_score = sanitizedRoles[0].fit_score;
+          } else {
+            const computed = this.computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD);
+            match_score = Math.min(computed.match_score, 95);
+          }
+        }
+      }
+
       const structured    = parsedData.structured || {};
       const profExpCount  = (structured.experience || []).filter(e => e.type === 'professional').length;
       const projCount     = (structured.projects   || []).length;
@@ -474,20 +371,20 @@ CRITICAL RULES:
           ? `${projCount} project(s) (student/fresher)`
           : '0 yrs, 0 roles';
 
-      // Step 8: Combine Resume Quality + Job Match into the final ATS
-      // Compatibility score. Weighted 60/40 — a well-built resume for the
-      // wrong role should land in the middle, not score as if either
-      // factor alone determined hireability.
       const atsCompatibility = Math.round(0.6 * resumeQuality.total + 0.4 * match_score);
 
-      // Step 9: Merge — our computed values override Gemini where needed
+      const jd_match_breakdown = this.computeJDBreakdown(
+        analysisData, parsedData, detectedDomain, jobDescription, hasJD, match_score
+      );
+
       return {
         ...analysisData,
-        match_score,                              // Job Match — derived from Gemini's own fit_score (see Step 6)
+        match_score,
         resume_quality_score:     resumeQuality.total,
         resume_quality_breakdown: resumeQuality.breakdown,
-        ats_score:                atsCompatibility, // combined compatibility, not a raw rule-based score anymore
+        ats_score:                atsCompatibility,
         ats_improvements:         atsImprovements,
+        jd_match_breakdown,
         detected_domain:          detectedDomain.name,
         domain_match_score:       detectedDomain.score,
         has_jd:                   hasJD,
@@ -510,11 +407,9 @@ CRITICAL RULES:
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
 
-    // Resume Quality areas only — Contact/Sections/Formatting/Action Verbs/
-    // Experience Depth. Raw weights sum to 60 (see atsCalculator.js).
     const maxScores = { contact: 10, sections: 15, formatting: 10, actionVerbs: 10, experienceDepth: 15 };
 
-    const prompt = `You are a resume-quality coach. Generate actionable cards to improve low-scoring RESUME QUALITY areas — structure, formatting, and writing quality. Do NOT suggest adding specific skills, technologies, or keywords; that is handled separately by the Job Match analysis.
+    const prompt = `You are a resume-quality coach. Generate actionable cards to improve low-scoring RESUME QUALITY areas — structure, formatting, and writing quality. Do NOT suggest adding specific skills, technologies, or keywords.
 
 CONTEXT (JSON):
 ${JSON.stringify({
@@ -533,7 +428,7 @@ RULES:
 1. Focus ONLY on areas where score < 70% of maxScore.
 2. Return 2–4 cards total.
 3. Each card: area, score, maxScore, priority (high/medium/low), whatToAdd (3–5 items), whatToAvoid (2–3 items), quickWins (2–3 items).
-4. Advice must be about STRUCTURE, FORMATTING, and WRITING QUALITY only — never about which skills/technologies to add.
+4. Advice must be about STRUCTURE, FORMATTING, and WRITING QUALITY only.
 5. No markdown inside strings. Plain text only.
 
 RESPONSE — ONLY valid JSON:
@@ -594,7 +489,7 @@ RESPONSE — ONLY valid JSON:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // FALLBACK ANALYSIS (no API key or Gemini error)
+  // FALLBACK ANALYSIS
   // ─────────────────────────────────────────────────────────────────────────
 
   createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription) {
@@ -602,23 +497,15 @@ RESPONSE — ONLY valid JSON:
     const domainKey      = parsedData.detected_domain_key || detectedDomain?.key || null;
     const matchedSkills  = this.matchSkillsAgainstDictionary(parsedData.skills_list || [], resumeText, domainKey);
     const domainSkills   = detectedDomain.template.important_skills || [];
-    const matchedDomain  = domainSkills.filter(s => resumeText.toLowerCase().includes(s.toLowerCase()));
+    const matchedDomain  = domainSkills.filter(s => new RegExp(`\\b${s}\\b`, 'i').test(resumeText));
 
-    // Compute match score using structured signals (same as Gemini path).
-    // This is the ONLY path where computeMatchScore() still drives the
-    // headline number — there's no Gemini output to derive a better one
-    // from when there's no API key. Capped at 95 like every other path.
     let { match_score } = this.computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD);
     match_score = Math.min(match_score, 95);
 
-    // Combine Resume Quality + Job Match into the final ATS Compatibility
-    // score — same 60/40 weighting as the Gemini path, so the number means
-    // the same thing regardless of which path produced it.
     const atsCompatibility = Math.round(0.6 * resumeQuality.total + 0.4 * match_score);
 
     let missingSkills = this.identifyMissingDomainSkills(matchedDomain, domainSkills);
 
-    // If JD provided, refine missing skills using domain-appropriate dictionary
     let jdNote = '';
     if (hasJD) {
       const jdLower    = jobDescription.toLowerCase();
@@ -644,12 +531,17 @@ RESPONSE — ONLY valid JSON:
         ? `${projCount} project(s) (student/fresher)`
         : '0 yrs, 0 roles';
 
+    const jd_match_breakdown = this.computeJDBreakdown(
+      null, parsedData, detectedDomain, jobDescription, hasJD, match_score
+    );
+
     return {
       ats_score:                atsCompatibility,
       resume_quality_score:     resumeQuality.total,
       resume_quality_breakdown: resumeQuality.breakdown,
       ats_improvements:         this.createFallbackAtsImprovements(resumeQuality, detectedDomain),
       match_score,
+      jd_match_breakdown,
       matched_skills:       [...new Set([...matchedSkills, ...matchedDomain])],
       missing_skills:       missingSkills,
       recommendations:      this.generateDomainRecommendations(parsedData, detectedDomain, hasJD),
@@ -669,12 +561,172 @@ RESPONSE — ONLY valid JSON:
     };
   }
 
-  // {role, fit_score, reasoning} objects anchored to the already-computed
-  // match_score, instead of a bare role-name list with no score at all —
-  // avoids the frontend having to invent its own arbitrary per-role
-  // percentage (which previously produced contradictions like a role
-  // described as "a significant mismatch" still showing 95% match).
+  /**
+   * Compute jd_match_breakdown sub-scores correctly.
+   *
+   * PREVIOUS BUG: Used computeMatchScore()._debug which scores the resume
+   * against its OWN domain (e.g. software_development), then multiplied by
+   * scaleFactor = match_score/100. This meant:
+   * - A backend resume vs UX JD: skillsRaw was HIGH (backend skills found in
+   * backend domain dict), multiplied by match_score=10/100=0.1, giving ~4/50
+   * which looks low BUT is caused by scaling not by actual JD overlap.
+   * - Sub-scores didn't independently reflect JD fit. They all moved together
+   * as one number, making the breakdown meaningless.
+   *
+   * FIX: Compute each sub-score independently against the ACTUAL JD content:
+   * - skillsMatch: overlap between JD-required skills and resume skills
+   * - experienceRelevance: how relevant the resume's projects/work is to JD
+   * - educationMatch: whether resume education meets JD education requirement
+   * - professionalPresence: GitHub/LinkedIn/portfolio presence
+   *
+   * When Gemini's output is available, we prefer its granular fields.
+   * When in fallback mode, we use JD keyword overlap directly.
+   */
+  computeJDBreakdown(geminiOutput, parsedData, detectedDomain, jobDescription, hasJD, match_score) {
+    const resumeText = parsedData.raw_text || '';
+    const contact    = parsedData.contact  || {};
+    const structured = parsedData.structured || {};
+
+    // ── 4. Professional Presence (0-10) ─── same regardless of JD ─────────
+    let presenceScore = 0;
+    if (contact.linkedin)                    presenceScore += 4;
+    if (contact.github || contact.portfolio) presenceScore += 4;
+    if (parsedData.summary)                  presenceScore += 2;
+    presenceScore = Math.min(presenceScore, 10);
+
+    // ── 3. Education Match (0-10) ──────────────────────────────────────────
+    // Check whether education meets JD requirements if stated, otherwise
+    // give partial credit for having any degree.
+    let eduScore = 0;
+    const hasDegree = /\b(b\.?tech|bachelor|master|degree|diploma|university|college|institute)\b/i.test(resumeText);
+    if (hasDegree) {
+      if (hasJD && jobDescription) {
+        const jdWantsMasters = /master|mba|m\.tech|phd/i.test(jobDescription);
+        const jdWantsBachelors = /bachelor|b\.tech|degree|graduate/i.test(jobDescription);
+        const hasMasters = /master|mba|m\.tech|ph\.d/i.test(resumeText);
+        const hasBachelors = /bachelor|b\.tech|b\.e\.|degree/i.test(resumeText);
+        if (jdWantsMasters && hasMasters) eduScore = 10;
+        else if (jdWantsMasters && hasBachelors) eduScore = 6;
+        else if (jdWantsBachelors && hasBachelors) eduScore = 9;
+        else if (jdWantsBachelors) eduScore = 7;
+        else eduScore = 7; // JD doesn't specify — degree = good
+      } else {
+        eduScore = /master|mba|m\.tech|ph\.d/i.test(resumeText) ? 10 : 8;
+      }
+    }
+
+    // ── 1. Skills Match (0-50) and 2. Experience Relevance (0-30) ─────────
+    // These MUST be computed against the JD's domain, not the resume's domain.
+    let skillsScore = 0;
+    let expScore    = 0;
+
+    if (hasJD && jobDescription && jobDescription.trim().length > 20) {
+      // Detect which domain the JD is for (may differ from resume's domain)
+      const jdDomain = domainTemplates.detectDomain(jobDescription);
+      const jdDomainKey = jdDomain?.key || null;
+
+      // Use the JD's domain dictionary (not the resume's)
+      const jdDictionary = this.getSkillDictionaryForDomain(jdDomainKey);
+      const jdText = jobDescription;
+
+      // Skills mentioned in the JD
+      const jdRequiredSkills = jdDictionary.filter(skill => {
+        const synonyms = this.skillSynonyms[skill] || [];
+        return [skill, ...synonyms].some(v => {
+          if (v.length < 2) return false;
+          try {
+            return new RegExp(`\\b${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(jdText);
+          } catch (_) { return false; }
+        });
+      });
+
+      if (geminiOutput && Array.isArray(geminiOutput.matched_skills) && geminiOutput.matched_skills.length >= 0) {
+        // Prefer Gemini's explicit skill lists when available — they're more
+        // accurate than our dictionary matching since Gemini understands semantics
+        const geminiMatched  = (geminiOutput.matched_skills || []).length;
+        const geminiMissing  = (geminiOutput.missing_skills  || []).length;
+        const geminiRequired = (geminiOutput.jd_requirements_extracted?.required_skills || []).length;
+        const totalRequired  = geminiRequired > 0 ? geminiRequired : Math.max(geminiMatched + geminiMissing, 1);
+        const ratio = geminiMatched / totalRequired;
+        skillsScore = Math.round(Math.sqrt(Math.min(ratio, 1)) * 50);
+
+        // Experience relevance from Gemini's matched_requirements
+        const metReqs     = (geminiOutput.matched_requirements || []).length;
+        const partialReqs = (geminiOutput.partial_requirements || []).length;
+        const totalReqs   = Math.max(metReqs + partialReqs + geminiMissing, 1);
+        const expRatio    = (metReqs + partialReqs * 0.5) / totalReqs;
+        expScore = Math.round(expRatio * 30);
+      } else {
+        // Fallback: count skills the JD mentions that also appear in resume
+        const matchedInResume = jdRequiredSkills.filter(skill => {
+          const synonyms = this.skillSynonyms[skill] || [];
+          return [skill, ...synonyms].some(v => {
+            if (v.length < 2) return false;
+            try {
+              return new RegExp(`\\b${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(resumeText);
+            } catch (_) { return false; }
+          });
+        });
+        const skillRatio = jdRequiredSkills.length > 0
+          ? matchedInResume.length / jdRequiredSkills.length : 0;
+        skillsScore = Math.round(Math.sqrt(skillRatio) * 50);
+
+        // Experience relevance: check if resume's projects/work text overlaps
+        // with the JD's domain keywords (NOT the resume's own domain)
+        const jdKeywordCount  = jdDomain.matchedKeywords?.length || 0;
+        const projExpText = [
+          ...(structured.projects   || []).map(p => (typeof p.description === 'string' ? p.description : (p.description || []).join(' '))),
+          ...(structured.experience || []).map(e => (typeof e.description === 'string' ? e.description : (e.description || []).join(' ')))
+        ].join(' ');
+        const jdWordsInExp = (jdDomain.matchedKeywords || []).filter(kw =>
+          new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(projExpText)
+        ).length;
+        const expRatio = jdKeywordCount > 0 ? jdWordsInExp / jdKeywordCount : 0;
+        expScore = Math.round(expRatio * 30);
+      }
+    } else {
+      // No JD: use resume's own domain for a domain-fit breakdown
+      const domainKey   = detectedDomain?.key || null;
+      const dictionary  = this.getSkillDictionaryForDomain(domainKey);
+      const topSkills   = dictionary.slice(0, 25);
+      const matchedCount = topSkills.filter(skill => {
+        const synonyms = this.skillSynonyms[skill] || [];
+        return [skill, ...synonyms].some(v => {
+          if (v.length < 2) return false;
+          try {
+            return new RegExp(`\\b${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(resumeText);
+          } catch (_) { return false; }
+        });
+      }).length;
+      skillsScore = Math.round(Math.sqrt(matchedCount / Math.max(topSkills.length, 1)) * 50);
+
+      const profExpCount = (structured.experience || []).filter(e => e.type === 'professional').length;
+      const projCount    = (structured.projects   || []).filter(p =>
+        (typeof p.description === 'string' && p.description.length > 30) ||
+        (Array.isArray(p.description) && p.description.length > 0)
+      ).length;
+      const hasMetrics = this.metricPatterns.some(p => p.test(resumeText));
+      if (profExpCount >= 3)      expScore = 30;
+      else if (profExpCount >= 2) expScore = 25;
+      else if (profExpCount >= 1) expScore = 20;
+      else if (projCount >= 3)    expScore = hasMetrics ? 18 : 14;
+      else if (projCount >= 2)    expScore = hasMetrics ? 14 : 10;
+      else if (projCount >= 1)    expScore = 7;
+    }
+
+    // Clamp all sub-scores to their max values
+    return {
+      skillsMatch:          Math.min(Math.max(Math.round(skillsScore),  0), 50),
+      experienceRelevance:  Math.min(Math.max(Math.round(expScore),     0), 30),
+      educationMatch:       Math.min(Math.max(Math.round(eduScore),     0), 10),
+      professionalPresence: Math.min(Math.max(Math.round(presenceScore),0), 10),
+    };
+  }
+
   buildFallbackSuggestedRoles(detectedDomain, matchScore) {
+    if (!detectedDomain || !detectedDomain.template || !Array.isArray(detectedDomain.template.suggested_roles)) {
+      return [];
+    }
     return detectedDomain.template.suggested_roles.slice(0, 4).map((role, i) => ({
       role,
       fit_score: Math.min(Math.max(matchScore - i * 8, 10), 95),
@@ -682,11 +734,6 @@ RESPONSE — ONLY valid JSON:
     }));
   }
 
-  /**
-   * Clamp every suggested role's fit_score into [10, 95] and drop malformed
-   * entries. No resume is ever a literal 100% fit for a role, so 95 is the
-   * ceiling everywhere this data is produced (Gemini path + fallback path).
-   */
   sanitizeSuggestedRoles(roles) {
     if (!Array.isArray(roles)) return [];
     return roles
@@ -703,25 +750,10 @@ RESPONSE — ONLY valid JSON:
       });
   }
 
-  /**
-   * Compute match_score (0-100) entirely from structured signals.
-   * Never rely on Gemini for this number — it's inconsistent.
-   *
-   * JD Match sub-component raw weights (sum = 40, scaled ×2.5 → 100):
-   *   Skills match    25  — hard skill overlap between resume and JD/domain
-   *   Domain match    10  — experience / project relevance to target domain
-   *   Keywords         5  — education + professional presence signals
-   *
-   * Score bands (after scaling):
-   *   Strong   (70–95): most requirements met
-   *   Moderate (45–69): half of requirements met
-   *   Weak     (20–44): few requirements met
-   */
   computeMatchScore(parsedData, detectedDomain, jobDescription, hasJD) {
     const resumeText = (parsedData.raw_text || '').toLowerCase();
     const domainKey  = parsedData.detected_domain_key || detectedDomain?.key || null;
 
-    // ── Skills match (25 raw pts) ─────────────────────────────────────────
     let skillsRaw = 0;
     if (hasJD) {
       const dictionary  = this.getSkillDictionaryForDomain(domainKey);
@@ -738,14 +770,12 @@ RESPONSE — ONLY valid JSON:
         });
         skillsRaw = Math.round((matched.length / jdKeywords.length) * 25);
       } else {
-        // JD has no recognisable skills → domain match fallback
         skillsRaw = this._domainSkillsScore(resumeText, detectedDomain, 25);
       }
     } else {
       skillsRaw = this._domainSkillsScore(resumeText, detectedDomain, 25);
     }
 
-    // ── Domain match (10 raw pts) — experience / project relevance ────────
     let domainRaw = 0;
     const structured   = parsedData.structured || {};
     const profExpCount = (structured.experience || []).filter(e => e.type === 'professional').length;
@@ -762,23 +792,19 @@ RESPONSE — ONLY valid JSON:
     else if (projCount >= 1)     domainRaw = 3;
     else                         domainRaw = 0;
 
-    // ── Keywords (5 raw pts) — education + professional presence ──────────
     let keywordsRaw = 0;
     const contact = parsedData.contact || {};
     const eduList  = structured.education || [];
 
-    // Education present (up to 3 pts)
     if (eduList.length > 0 || /\b(education|degree|university|college|institute|school)\b/i.test(resumeText)) {
       const hasMasters   = /master|mba|m\.tech|m\.sc|m\.e\.|m\.des|phd|ph\.d/i.test(resumeText);
       const hasBachelors = /bachelor|b\.tech|b\.e\.|b\.sc|b\.a\.|degree|diploma/i.test(resumeText);
       keywordsRaw += hasMasters ? 3 : hasBachelors ? 2 : 1;
     }
-    // Professional presence (up to 2 pts)
     if (contact.linkedin)                    keywordsRaw += 1;
     if (contact.github || contact.portfolio) keywordsRaw += 1;
     keywordsRaw = Math.min(keywordsRaw, 5);
 
-    // ── Scale raw /40 → /100 ─────────────────────────────────────────────
     const rawTotal = skillsRaw + domainRaw + keywordsRaw;
     const total    = Math.round((rawTotal / 40) * 100);
 
@@ -788,18 +814,15 @@ RESPONSE — ONLY valid JSON:
     };
   }
 
-  // Helper: ratio of domain important_skills found in resume → max pts
   _domainSkillsScore(resumeTextLower, detectedDomain, maxPts) {
     const domainSkills = detectedDomain?.template?.important_skills || [];
     if (domainSkills.length === 0) return Math.round(maxPts * 0.3);
     const matched = domainSkills.filter(s =>
       resumeTextLower.includes(s.toLowerCase())
     ).length;
-    // sqrt curve: first matches count more
     return Math.round(Math.sqrt(matched / domainSkills.length) * maxPts);
   }
 
-  // Metric patterns reused from atsCalculator for expScore
   get metricPatterns() {
     return [
       /\d+\s*%/, /\d+\s*(users?|clients?)/i, /\$\s*\d+/, /₹\s*\d+/,
@@ -808,92 +831,16 @@ RESPONSE — ONLY valid JSON:
     ];
   }
 
-  async generateRoleDetails(roleName, userSkills, matchedSkills, missingSkills, apiKey) {
-    const key = apiKey || process.env.GEMINI_API_KEY;
-    if (!key) return { success: false, data: this._fallbackRoleDetails(roleName, missingSkills) };
-
-    try {
-      const genAI = new GoogleGenerativeAI(key);
-      const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
-
-      const prompt = `You are an expert career advisor. Analyze this job role and return JSON only.
-
-Job Role: ${roleName}
-Candidate Skills: ${userSkills.join(', ') || 'None'}
-Matched Skills: ${matchedSkills.join(', ') || 'None'}
-Missing Skills: ${missingSkills.join(', ') || 'None'}
-
-Return ONLY this JSON structure (no markdown):
-{
-  "roleDescription": "2–3 sentence description of role and responsibilities",
-  "requiredSkills": ["skill1", "skill2"],
-  "niceToHaveSkills": ["skill1"],
-  "companyExpectations": ["expectation1", "expectation2", "expectation3", "expectation4", "expectation5"],
-  "careerAdvice": ["tip1", "tip2", "tip3", "tip4", "tip5"],
-  "learningPath": ["step1", "step2", "step3", "step4"],
-  "salaryRange": "e.g. ₹6–12 LPA or $60k–$90k",
-  "experienceLevel": "Entry/Mid/Senior",
-  "industryDemand": "High/Medium/Low"
-}`;
-
-      const result  = await model.generateContent(prompt);
-      const text    = result.response.text().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const details = JSON.parse(text);
-      return { success: true, data: details };
-    } catch (err) {
-      console.error('generateRoleDetails error:', err.message);
-      return { success: false, data: this._fallbackRoleDetails(roleName, missingSkills) };
-    }
-  }
-
-  _fallbackRoleDetails(roleName, missingSkills) {
-    return {
-      roleDescription: `${roleName} is a technical position requiring strong programming and problem-solving skills.`,
-      requiredSkills:  missingSkills.length > 0 ? missingSkills : ['Programming', 'Problem Solving', 'Communication'],
-      niceToHaveSkills: ['Cloud Computing', 'DevOps', 'Agile'],
-      companyExpectations: [
-        'Write clean, maintainable code',
-        'Collaborate effectively with team members',
-        'Meet project deadlines and deliver quality work',
-        'Learn and adapt to new technologies',
-        'Communicate technical concepts clearly'
-      ],
-      careerAdvice: [
-        'Build a strong portfolio with diverse projects',
-        'Contribute to open-source projects on GitHub',
-        'Network with professionals on LinkedIn',
-        'Stay updated with industry trends',
-        'Practice coding on platforms like LeetCode'
-      ],
-      learningPath: [
-        'Master fundamental programming concepts and data structures',
-        'Build 3–5 projects showcasing your skills',
-        'Learn version control (Git) and collaboration tools',
-        'Gain experience with relevant frameworks'
-      ],
-      salaryRange: 'Varies by location and experience',
-      experienceLevel: 'Entry to Mid-level',
-      industryDemand: 'High'
-    };
-  }
-
   // ─────────────────────────────────────────────────────────────────────────
   // HELPER METHODS
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Build the active skill dictionary for a given domain.
-   * Tech domains → techSkillsDictionary
-   * Non-tech domains → domain-specific dictionary + soft skills
-   * Unknown → everything (broad scan)
-   */
   getSkillDictionaryForDomain(domainKey) {
     const techDomains = new Set([
       'software_development', 'data_science', 'cybersecurity', 'qa_testing'
     ]);
 
     if (!domainKey || !this.domainSkillDictionaries[domainKey]) {
-      // Unknown domain: use tech + all non-tech dictionaries combined
       const all = new Set([
         ...this.techSkillsDictionary,
         ...this.softSkillsDictionary
@@ -906,28 +853,21 @@ Return ONLY this JSON structure (no markdown):
       return [...this.techSkillsDictionary, ...this.softSkillsDictionary];
     }
 
-    // Non-tech domain: domain-specific list + soft skills (no tech noise)
     return [
       ...(this.domainSkillDictionaries[domainKey] || []),
       ...this.softSkillsDictionary
     ];
   }
 
-  /**
-   * Match resume skills against the domain-appropriate dictionary.
-   * Pass 1: exact / synonym match on the extracted skills list.
-   * Pass 2: full-text regex scan for anything missed.
-   */
   matchSkillsAgainstDictionary(resumeSkills, fullResumeText = '', domainKey = null) {
     const dictionary = this.getSkillDictionaryForDomain(domainKey);
     const matched    = new Set();
 
-    // Pass 1: extracted skills list vs dictionary (with synonym support for tech)
+    // Pass 1: explicit skill list
     resumeSkills.forEach(skill => {
       const skillLower = skill.toLowerCase().trim();
       dictionary.forEach(dictSkill => {
         if (skillLower === dictSkill.toLowerCase()) { matched.add(dictSkill); return; }
-        // Synonym check (tech skills only)
         const synonyms = this.skillSynonyms[dictSkill] || [];
         for (const syn of [dictSkill, ...synonyms]) {
           const synL = syn.toLowerCase();
@@ -936,7 +876,6 @@ Return ONLY this JSON structure (no markdown):
           }
         }
       });
-      // Also check synonym keys
       Object.keys(this.skillSynonyms).forEach(canonical => {
         if (!dictionary.includes(canonical)) return;
         for (const syn of this.skillSynonyms[canonical]) {
@@ -948,16 +887,32 @@ Return ONLY this JSON structure (no markdown):
       });
     });
 
-    // Pass 2: full-text scan
+    // Pass 2: full-text scan (UPDATED Regex engine for strict boundaries)
     if (fullResumeText.trim().length > 0) {
       dictionary.forEach(dictSkill => {
         const synonyms = this.skillSynonyms[dictSkill] || [];
         for (const variation of [dictSkill, ...synonyms]) {
           try {
-            const pattern = new RegExp(
-              `\\b${variation.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i'
-            );
-            if (pattern.test(fullResumeText)) { matched.add(dictSkill); break; }
+            let flags = 'i';
+            let regexStr = variation.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            // Strictly case-sensitive for single letter or highly common short words
+            if (variation === 'C' || variation === 'R') {
+              flags = ''; // Case Sensitive
+              regexStr = `\\b${variation}\\b`;
+            } 
+            // Avoid using standard word boundaries (\b) at the end of symbols (+ or #)
+            else if (variation.includes('+') || variation.includes('#')) {
+              regexStr = `(?<!\\w)${regexStr}(?![\\w\\+#])`;
+            } 
+            else {
+              regexStr = `\\b${regexStr}\\b`;
+            }
+
+            if (new RegExp(regexStr, flags).test(fullResumeText)) { 
+              matched.add(dictSkill); 
+              break; 
+            }
           } catch (_) { /* skip invalid regex */ }
         }
       });
@@ -972,21 +927,18 @@ Return ONLY this JSON structure (no markdown):
     const skillsObj  = structured.skills || sections.skills || {};
     const text       = parsedData.raw_text || '';
 
-    // ── Education ──────────────────────────────────────────────────────────
     let edu = structured.education || sections.education;
-    // Parser returned empty → extract the education block from raw text directly
     if (!edu || (Array.isArray(edu) && edu.length === 0)) {
       const eduMatch = text.match(
         /(?:education|academic background)[^\n]*\n([\s\S]{20,600}?)(?=\n(?:skills?|experience|projects?|achievements?|certifications?|summary|$))/i
       );
       edu = eduMatch
-        ? eduMatch[1].trim()   // raw text snippet — Gemini can read it
+        ? eduMatch[1].trim()
         : /\b(b\.?tech|bachelor|master|degree|university|college|institute|cgpa|gpa)\b/i.test(text)
           ? this._extractTextSection(text, /\beducation\b/i, /\b(skills?|experience|projects?|achievements?)\b/i)
           : 'Not provided';
     }
 
-    // ── Experience ─────────────────────────────────────────────────────────
     let exp = structured.experience || sections.experience;
     if (!exp || (Array.isArray(exp) && exp.length === 0)) {
       const expSnippet = this._extractTextSection(
@@ -997,7 +949,6 @@ Return ONLY this JSON structure (no markdown):
       exp = expSnippet || 'No professional experience listed';
     }
 
-    // ── Projects ───────────────────────────────────────────────────────────
     let proj = structured.projects || sections.projects;
     if (!proj || (Array.isArray(proj) && proj.length === 0)) {
       const projSnippet = this._extractTextSection(
@@ -1033,10 +984,6 @@ Return ONLY this JSON structure (no markdown):
     };
   }
 
-  /**
-   * Extract a text block between a start heading and the next section heading.
-   * Returns null if start heading not found or block is too short.
-   */
   _extractTextSection(text, startPattern, endPattern) {
     const lines  = text.split('\n');
     const startI = lines.findIndex(l => startPattern.test(l.trim()));
@@ -1052,11 +999,6 @@ Return ONLY this JSON structure (no markdown):
     return block.length > 20 ? block : null;
   }
 
-  /**
-   * Section completeness percentage (0–100) shown in the UI.
-   * Uses the same two-pass logic as atsCalculator.calculateSectionCompleteness
-   * so the two numbers are always consistent with each other.
-   */
   calculateSectionCompleteness(parsedData) {
     const text      = parsedData.raw_text || '';
     const structured = parsedData.structured || {};
@@ -1079,16 +1021,11 @@ Return ONLY this JSON structure (no markdown):
     };
 
     const checks = [
-      // contact
       !!(parsedData.contact?.name && parsedData.contact?.email),
-      // education
       sectionPresent(['education'], /\b(education|b\.?tech|bachelor|master|degree|university|college|institute)\b/i),
-      // skills
       sectionPresent(['skills', 'all_skills'], /\b(skills?|technical skills?|languages?|frameworks?|tools)\b/i),
-      // experience OR projects
       sectionPresent(['experience'], /\b(experience|work history|employment|internship)\b/i) ||
       sectionPresent(['projects'],   /\b(projects?|personal projects?|key projects?)\b/i),
-      // summary
       sectionPresent(['summary'], /\b(summary|objective|profile|about me)\b/i),
     ];
 

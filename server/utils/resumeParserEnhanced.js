@@ -2,17 +2,6 @@ const pdfParse = require('pdf-parse');
 const mammoth  = require('mammoth');
 const fs       = require('fs').promises;
 
-/**
- * EnhancedResumeParser
- *
- * FIXES:
- * - Legacy `sections` map now returns raw arrays/objects (not joined strings) so
- *   atsCalculator.calculateSectionCompleteness() can correctly assess content.
- * - extractExperience() now parses real work/internship entries in addition to
- *   competitive-programming profiles.
- * - extractProjects() is more robust — avoids swallowing experience entries.
- * - Location pattern is generalised beyond a hard-coded Indian city list.
- */
 class EnhancedResumeParser {
   constructor() {
     this.urlPatterns = {
@@ -30,17 +19,6 @@ class EnhancedResumeParser {
     if (!text) return '';
     return text
       .replace(/\r/g, '')
-      // IMPORTANT: split into lines FIRST, then collapse only horizontal
-      // whitespace (spaces/tabs) within each line. The previous version
-      // ran /\s{2,}/g across the whole string before splitting — but \s
-      // matches \n too, and pdf-parse commonly emits a trailing space
-      // right before each line's newline (e.g. "SACHIN JANGID \n").
-      // That trailing-space + newline is two whitespace chars in a row,
-      // so the old regex silently deleted the newline, merging the
-      // entire resume into 1-2 giant lines. Every line-anchored section
-      // detector (EDUCATION/PROJECTS/EXPERIENCE headers, bullet-point
-      // detection, formatting heading scan) then found nothing to match
-      // against, regardless of how good the resume actually was.
       .split('\n')
       .map(line => line.replace(/[ \t]{2,}/g, ' ').trim())
       .filter(line => line.length > 0)
@@ -68,21 +46,12 @@ class EnhancedResumeParser {
 
   // ─── Section boundary helper ───────────────────────────────────────────────
 
-  /**
-   * Returns the index in `lines` where a given section heading appears,
-   * or -1 if not found.
-   */
   findSectionIndex(lines, patterns) {
     return lines.findIndex(l => patterns.some(p => p.test(l.trim())));
   }
 
-  /**
-   * Extracts lines belonging to a section (from sectionIdx+1 until the next
-   * recognised section heading). Works for both title-case and ALL-CAPS headings.
-   */
   extractSectionLines(lines, sectionIdx) {
     if (sectionIdx === -1) return [];
-    // All common resume section headings — matched case-insensitively and trimmed
     const nextSectionPatterns = [
       /^(education|academic background|academic qualifications?)$/i,
       /^(experience|work experience|professional experience|work history|employment history|employment|career history|positions? held)$/i,
@@ -120,7 +89,6 @@ class EnhancedResumeParser {
       'objective', 'contact', 'profile', 'about', 'achievements'
     ];
 
-    // Name: first short line in top 8 that isn't a header/email/phone
     for (let i = 0; i < Math.min(8, lines.length); i++) {
       const line = lines[i].trim();
       if (
@@ -129,31 +97,26 @@ class EnhancedResumeParser {
         line.split(/\s+/).length <= 5 &&
         !commonHeaders.some(h => line.toLowerCase().includes(h)) &&
         !/@|[:()|]/.test(line) &&
-        !/\d{5,}/.test(line)   // allow short numbers but not long digit runs
+        !/\d{5,}/.test(line)
       ) {
         contact.name = line;
         break;
       }
     }
 
-    // Email
     const emailMatch = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/);
     contact.email    = emailMatch ? emailMatch[0] : null;
 
-    // Phone — handles +91, leading 0, various separators
     const phoneMatch = text.match(/(?:\+91[-.\s]?|0)?[6-9]\d{9}|(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
     contact.phone    = phoneMatch ? phoneMatch[0].replace(/[-.\s()]/g, '') : null;
 
-    // LinkedIn — full URL OR plain "LinkedIn" text near the header
     const linkedinUrlMatch = text.match(/linkedin\.com\/in\/([\w-]+)/i);
     if (linkedinUrlMatch) {
       contact.linkedin = `linkedin.com/in/${linkedinUrlMatch[1]}`;
     } else if (/\blinkedin\b/i.test(text.slice(0, 500))) {
-      // Plain label "LinkedIn" in the header area — treat as present
       contact.linkedin = 'linkedin.com (linked in header)';
     }
 
-    // GitHub — full URL OR plain "GitHub" label
     const githubUrlMatch = text.match(/github\.com\/([\w-]+)/i);
     if (githubUrlMatch) {
       contact.github = `github.com/${githubUrlMatch[1]}`;
@@ -161,7 +124,6 @@ class EnhancedResumeParser {
       contact.github = 'github.com (linked in header)';
     }
 
-    // Portfolio — any netlify/vercel/heroku/personal domain that isn't github/linkedin
     const portfolioMatch = text.match(
       /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+\.(?:netlify\.app|vercel\.app|herokuapp\.com|web\.app|github\.io))/i
     );
@@ -170,7 +132,6 @@ class EnhancedResumeParser {
         ? portfolioMatch[0] : `https://${portfolioMatch[0]}`;
     }
 
-    // Location — City/State patterns + major Indian cities
     const locationPattern = /(?:[A-Z][a-z]+(?:\s[A-Z][a-z]+)*,\s*(?:[A-Z]{2,}|[A-Z][a-z]+))|(?:Jaipur|Delhi|Mumbai|Bangalore|Bengaluru|Hyderabad|Chennai|Pune|Kolkata|Ahmedabad|Surat|Lucknow|Noida|Gurugram|Gurgaon|Indore|Nagaur|Trichy|Tiruchirappalli|New York|San Francisco|London|Berlin|Dubai)/g;
     const locationMatch   = text.match(locationPattern);
     contact.location      = locationMatch ? locationMatch[0] : null;
@@ -213,13 +174,8 @@ class EnhancedResumeParser {
     const eduLines = this.extractSectionLines(lines, eduIdx);
     let current    = null;
 
-    // Any date format: "Dec 2020 — May 2022", "2020 – 2022", "2016 - Present"
     const datePattern = /(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?\d{4}\s*[-–—]\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?(?:\d{4}|present|ongoing|current)/i;
-
-    // Degree patterns — covers HCI, Arts, Commerce, Science, Law, etc.
     const degreePattern = /B\.?Tech|M\.?Tech|B\.?E\.?|M\.?E\.?|Bachelor|Master|Masters|Diploma|B\.?Sc|M\.?Sc|MBA|Ph\.?D|B\.?A\.?|M\.?A\.?|B\.?Com|M\.?Com|LLB|LLM|BBA|BCA|MCA|B\.?Des|M\.?Des|HCI|Human.Computer|Interaction Design|Graphic Design|Fine Arts|Liberal Arts|Psychology|Nursing|Pharmacy|Architecture/i;
-
-    // Institution patterns — broader than before
     const institutionPattern = /College|University|Institute|School|IIIT|IIT|NIT|Academy|Polytechnic|Pratt|MIT|Stanford|Harvard|Oxford|Campus|Faculty|Department/i;
 
     eduLines.forEach(rawLine => {
@@ -230,12 +186,6 @@ class EnhancedResumeParser {
       const isDegree = degreePattern.test(line);
       const isInst   = institutionPattern.test(line) || /^[A-Z][A-Z\s]{4,}$/.test(line);
 
-      // A single line can legitimately contain BOTH an institution name AND
-      // a date range, e.g. "Indian Institute of Information Technology,
-      // Trichy August 2023 – 2027" — the previous isInst check required
-      // !isDate, so this case fell through to the date-only branch and the
-      // institute name was silently dropped (institute stayed null even
-      // though it was right there in the same line as the duration).
       if (isInst && isDate) {
         if (current && (current.institute || current.degree)) education.push(current);
         const dateMatch = line.match(datePattern);
@@ -245,7 +195,6 @@ class EnhancedResumeParser {
         if (current) education.push(current);
         current = { institute: line, degree: null, duration: null, cgpa: null, details: [] };
       } else if (isDegree && !isDate) {
-        // Could be a new entry if we haven't started one, or belong to current
         if (!current) current = { institute: null, degree: line, duration: null, cgpa: null, details: [] };
         else current.degree = line;
       } else if (isDate) {
@@ -254,7 +203,6 @@ class EnhancedResumeParser {
       } else if (current && /cgpa|gpa|percentage|%|grade/i.test(line)) {
         current.cgpa = line;
       } else if (current) {
-        // Check if this line starts a combined degree+institution line e.g. "Masters Degree in HCI, Pratt Institute"
         if (isDegree && isInst) {
           if (current && (current.degree || current.institute)) education.push(current);
           current = { institute: line, degree: line, duration: null, cgpa: null, details: [] };
@@ -270,31 +218,20 @@ class EnhancedResumeParser {
 
   // ─── 4. Skills ────────────────────────────────────────────────────────────
 
-  /**
-   * Universal skill extractor.
-   * Returns a `categories` object whose keys depend on the detected domain.
-   * Tech resumes get languages/frameworks/etc.
-   * Non-tech resumes get domain-appropriate buckets (tools, soft_skills, domain_skills, etc.)
-   * All resumes also get a flat `all` array for easy downstream use.
-   */
   extractSkillsCategorized(text, detectedDomainKey = null) {
-    // ── Always-present universal categories ──────────────────────────────
     const skills = {
-      // Tech (populated only when relevant)
       languages:    [],
       frameworks:   [],
       databases:    [],
-      tools:        [],        // software/platform tools (universal)
+      tools:        [],
       ai_ml:        [],
       cloud:        [],
-      // Non-tech domain skills (populated by domain-specific maps below)
-      domain_skills: [],       // e.g. SEO, Payroll, Patient Care
-      soft_skills:   [],       // Communication, Leadership, etc.
-      certifications_found: [], // any cert-like tokens found in skills text
+      domain_skills: [],
+      soft_skills:   [],
+      certifications_found: [],
       other:        []
     };
 
-    // ── Universal soft-skill patterns (apply to ALL domains) ─────────────
     const softSkillMap = {
       'Communication':       ['communication', 'verbal communication', 'written communication'],
       'Leadership':          ['leadership', 'team lead', 'leading teams'],
@@ -314,9 +251,7 @@ class EnhancedResumeParser {
       'Google Workspace':    ['google workspace', 'google docs', 'google sheets', 'google slides', 'gsuite'],
     };
 
-    // ── Domain-specific skill maps ────────────────────────────────────────
     const domainSkillMaps = {
-
       marketing: {
         'SEO':                   ['seo', 'search engine optimization'],
         'SEM':                   ['sem', 'search engine marketing'],
@@ -338,7 +273,6 @@ class EnhancedResumeParser {
         'Canva':                 ['canva'],
         'WordPress':             ['wordpress'],
       },
-
       sales: {
         'Lead Generation':       ['lead generation', 'prospecting', 'cold calling'],
         'CRM':                   ['crm', 'salesforce', 'zoho crm', 'pipedrive'],
@@ -353,7 +287,6 @@ class EnhancedResumeParser {
         'Presentation Skills':   ['presentation', 'pitch', 'demo'],
         'Customer Retention':    ['retention', 'churn reduction'],
       },
-
       human_resources: {
         'Recruitment':           ['recruitment', 'hiring', 'talent acquisition'],
         'Onboarding':            ['onboarding', 'induction'],
@@ -368,7 +301,6 @@ class EnhancedResumeParser {
         'Workforce Planning':    ['workforce planning', 'headcount planning'],
         'Exit Management':       ['exit interview', 'offboarding', 'attrition'],
       },
-
       finance: {
         'Financial Analysis':    ['financial analysis', 'financial modelling', 'financial modeling'],
         'Accounting':            ['accounting', 'bookkeeping'],
@@ -386,7 +318,6 @@ class EnhancedResumeParser {
         'Accounts Receivable':   ['accounts receivable', 'ar'],
         'CPA':                   ['cpa', 'ca', 'cfa', 'acca', 'cma'],
       },
-
       healthcare: {
         'Patient Care':          ['patient care', 'bedside manner', 'patient management'],
         'EMR/EHR':               ['emr', 'ehr', 'electronic health record', 'epic', 'cerner', 'meditech'],
@@ -401,7 +332,6 @@ class EnhancedResumeParser {
         'Healthcare Administration':['healthcare administration', 'hospital administration'],
         'Telemedicine':          ['telemedicine', 'telehealth'],
       },
-
       education: {
         'Curriculum Development':['curriculum', 'curriculum design', 'course development'],
         'Lesson Planning':       ['lesson plan', 'lesson planning'],
@@ -415,7 +345,6 @@ class EnhancedResumeParser {
         'Zoom / Google Meet':    ['zoom', 'google meet', 'online teaching', 'virtual classroom'],
         'Content Development':   ['content development', 'study material', 'teaching material'],
       },
-
       logistics: {
         'Inventory Management':  ['inventory management', 'stock management', 'inventory control'],
         'WMS':                   ['wms', 'warehouse management system', 'sap wm', 'oracle wms'],
@@ -429,7 +358,6 @@ class EnhancedResumeParser {
         'Last Mile Delivery':    ['last mile', 'last-mile delivery', 'delivery management'],
         'Import / Export':       ['import', 'export', 'customs clearance', 'incoterms'],
       },
-
       customer_service: {
         'Ticketing Systems':     ['zendesk', 'freshdesk', 'servicenow', 'jira service'],
         'CRM':                   ['crm', 'salesforce', 'hubspot'],
@@ -442,7 +370,6 @@ class EnhancedResumeParser {
         'Upselling':             ['upselling', 'cross-selling'],
         'Multilingual':          ['bilingual', 'multilingual', 'hindi', 'english', 'regional language'],
       },
-
       project_management: {
         'Agile':                 ['agile', 'scrum', 'kanban', 'sprint'],
         'PMP':                   ['pmp', 'prince2', 'capm'],
@@ -457,7 +384,6 @@ class EnhancedResumeParser {
         'Change Management':     ['change management', 'change control'],
         'Reporting':             ['status report', 'progress report', 'dashboard reporting'],
       },
-
       content_writing: {
         'SEO Writing':           ['seo writing', 'seo content', 'keyword research'],
         'Copywriting':           ['copywriting', 'ad copy', 'sales copy'],
@@ -472,7 +398,6 @@ class EnhancedResumeParser {
         'Social Media Content':  ['social media content', 'caption writing', 'thread writing'],
         'Script Writing':        ['script writing', 'video script', 'podcast script'],
       },
-
       design: {
         'Figma':                 ['figma'],
         'Adobe XD':              ['adobe xd', 'xd'],
@@ -491,7 +416,6 @@ class EnhancedResumeParser {
         'Motion Design':         ['motion design', 'animation', 'lottie'],
         'Accessibility':         ['accessibility', 'wcag', 'a11y'],
       },
-
       cybersecurity: {
         'Penetration Testing':   ['penetration testing', 'pen testing', 'pentest'],
         'SIEM':                  ['siem', 'splunk', 'qradar', 'elastic siem'],
@@ -506,7 +430,6 @@ class EnhancedResumeParser {
         'Scripting':             ['bash scripting', 'python scripting', 'powershell'],
         'SOC':                   ['soc', 'security operations center', 'soc analyst'],
       },
-
       qa_testing: {
         'Manual Testing':        ['manual testing', 'test cases', 'test execution'],
         'Selenium':              ['selenium', 'selenium webdriver'],
@@ -521,10 +444,9 @@ class EnhancedResumeParser {
         'SQL (for testing)':     ['sql', 'database testing'],
         'Appium':                ['appium', 'mobile testing'],
       },
-
       data_science: {
         'Python':                ['python'],
-        'R':                     ['\\br\\b', 'r programming', 'r studio'],
+        'R':                     ['r', 'r programming', 'r studio'],
         'SQL':                   ['sql'],
         'Machine Learning':      ['machine learning', 'ml', 'supervised learning', 'unsupervised learning'],
         'Deep Learning':         ['deep learning', 'neural network', 'cnn', 'rnn', 'transformer'],
@@ -538,27 +460,23 @@ class EnhancedResumeParser {
         'Feature Engineering':   ['feature engineering', 'feature selection'],
         'Model Deployment':      ['mlflow', 'model deployment', 'flask api', 'fastapi'],
       },
-
-      software_development: {
-        // Covered by the tech section below — just reference the same map
-      }
+      software_development: {}
     };
 
-    // ── Tech skill map (used for tech domains + always scanned) ──────────
     const techSkillMap = {
       languages: {
         'C++':        ['c\\+\\+', 'cpp'],
-        'C':          ['\\bc\\b'],
+        'C':          ['c'],
         'Python':     ['python'],
         'JavaScript': ['javascript', 'js', 'ecmascript'],
         'TypeScript': ['typescript', 'ts'],
-        'Java':       ['\\bjava\\b'],
+        'Java':       ['java'],
         'SQL':        ['sql'],
-        'Go':         ['\\bgo\\b', 'golang'],
-        'Rust':       ['\\brust\\b'],
-        'PHP':        ['\\bphp\\b'],
-        'Ruby':       ['\\bruby\\b'],
-        'Swift':      ['\\bswift\\b'],
+        'Go':         ['go', 'golang'],
+        'Rust':       ['rust'],
+        'PHP':        ['php'],
+        'Ruby':       ['ruby'],
+        'Swift':      ['swift'],
         'Kotlin':     ['kotlin'],
       },
       frameworks: {
@@ -585,7 +503,7 @@ class EnhancedResumeParser {
         'DynamoDB':   ['dynamodb'],
       },
       tools: {
-        'Git':          ['\\bgit\\b'],
+        'Git':          ['git'],
         'GitHub':       ['github'],
         'Docker':       ['docker'],
         'Kubernetes':   ['kubernetes', 'k8s'],
@@ -603,8 +521,8 @@ class EnhancedResumeParser {
         'PyTorch':          ['pytorch'],
         'Pandas':           ['pandas'],
         'NumPy':            ['numpy'],
-        'Machine Learning': ['machine learning', '\\bml\\b'],
-        'Deep Learning':    ['deep learning', '\\bdl\\b'],
+        'Machine Learning': ['machine learning', 'ml'],
+        'Deep Learning':    ['deep learning', 'dl'],
         'Scikit-learn':     ['scikit.learn', 'sklearn'],
         'OpenAI':           ['openai'],
       },
@@ -634,9 +552,29 @@ class EnhancedResumeParser {
     const matchPatterns = (map) => {
       const results = [];
       for (const [skillName, patterns] of Object.entries(map)) {
-        for (const pattern of patterns) {
+        for (let pattern of patterns) {
           try {
-            if (new RegExp(`\\b${pattern}\\b`, 'i').test(text)) {
+            // Strip any hardcoded \b bounds if they were left in the dictionary
+            pattern = pattern.replace(/\\b/gi, ''); 
+            
+            let flags = 'i';
+            let regexStr = pattern;
+
+            // 1. Strict Case-Sensitive constraints for high-risk single-letter tech
+            if (pattern === 'c' || pattern === 'r') {
+              flags = ''; // Case sensitive
+              regexStr = `\\b${skillName}\\b`; // Strictly map 'c' to 'C' or 'r' to 'R'
+            }
+            // 2. Symbols (+, #) don't trigger standard \b word boundaries
+            else if (pattern.includes('+') || pattern.includes('#')) {
+              regexStr = `(?<!\\w)${regexStr}(?![\\w\\+#])`;
+            }
+            // 3. Standard parsing
+            else {
+              regexStr = `\\b${regexStr}\\b`;
+            }
+
+            if (new RegExp(regexStr, flags).test(text)) {
               results.push(skillName);
               break;
             }
@@ -655,16 +593,12 @@ class EnhancedResumeParser {
     skills.soft_skills = matchPatterns(softSkillMap);
 
     // ── 3. Domain-specific skills ─────────────────────────────────────────
-    // Use the detected domain key if provided, else scan ALL non-tech domain maps
-    // so we never miss skills for ambiguous resumes
     const techDomains = new Set(['software_development', 'data_science', 'cybersecurity', 'qa_testing']);
     const isTechDomain = detectedDomainKey && techDomains.has(detectedDomainKey);
 
     if (detectedDomainKey && domainSkillMaps[detectedDomainKey]) {
-      // Targeted: only scan the detected domain's map
       skills.domain_skills = matchPatterns(domainSkillMaps[detectedDomainKey]);
     } else if (!isTechDomain) {
-      // Fallback: scan all non-tech domain maps and collect everything found
       const allDomainSkills = new Set();
       for (const [, domainMap] of Object.entries(domainSkillMaps)) {
         if (Object.keys(domainMap).length === 0) continue;
@@ -701,7 +635,7 @@ class EnhancedResumeParser {
 
     const projLines = this.extractSectionLines(lines, projIdx);
     let current       = null;
-    let inDescription = false; // true once we've started appending wrapped bullet/description text for the current project
+    let inDescription = false;
 
     projLines.forEach(rawLine => {
       const line = rawLine.trim();
@@ -709,13 +643,6 @@ class EnhancedResumeParser {
 
       const isBullet = /^[•\-\*]/.test(line);
 
-      // Project title heuristic: the plain "<80 chars" rule misclassifies
-      // any title line that also contains a long GitHub URL (very common:
-      // "Project Name github.com/user/repo" easily exceeds 80 chars), which
-      // merges that project's heading into the PREVIOUS project's description
-      // and silently drops the project boundary. A title line is never a
-      // bullet, and is either short OR contains a project-link pattern,
-      // which is a stronger signal than raw length.
       const hasProjectLink = /github\.com\/|gitlab\.com\/|bitbucket\.org\//i.test(line);
       const isTitle = !isBullet &&
                        /^[A-Z]/.test(line) &&
@@ -745,11 +672,6 @@ class EnhancedResumeParser {
         return;
       }
 
-      // Once a bullet starts, every following non-bullet, non-title line is
-      // a WRAPPED CONTINUATION of that bullet (PDF extraction frequently
-      // breaks one sentence across two physical lines, and the continuation
-      // loses its bullet marker). Without this, continuation lines that
-      // happen to contain 2+ commas get misread as tech-stack lines.
       if (isBullet) {
         inDescription = true;
         current.description.push(line.replace(/^[•\-\*]\s*/, ''));
@@ -769,8 +691,6 @@ class EnhancedResumeParser {
         return;
       }
 
-      // Not yet inside any bullet — likely a genuine tech-stack line
-      // sitting between the title and the first bullet.
       const looksLikeTechList = line.length < 100 &&
                                  /[|,]/.test(line) &&
                                  line.split(/[|,]/).length >= 2 &&
@@ -792,10 +712,6 @@ class EnhancedResumeParser {
 
   // ─── 6. Experience ────────────────────────────────────────────────────────
 
-  /**
-   * Extracts BOTH real work/internship experience AND competitive-programming
-   * achievements. The original code only handled the latter.
-   */
   extractExperience(text) {
     const experience = [];
     const lines      = text.split('\n');
@@ -806,7 +722,7 @@ class EnhancedResumeParser {
       /^professional\s+experience$/i,
       /^work\s+history$/i,
       /^employment(\s+history)?$/i,
-      /^e\s*m\s*p\s*l\s*o\s*y\s*m\s*e\s*n\s*t/i,  // spaced letters like "E M P L O Y M E N T"
+      /^e\s*m\s*p\s*l\s*o\s*y\s*m\s*e\s*n\s*t/i,
       /^internships?$/i,
       /^career(\s+history)?$/i,
       /^positions?\s+held$/i,
@@ -816,10 +732,7 @@ class EnhancedResumeParser {
       const expLines = this.extractSectionLines(lines, expIdx);
       let current    = null;
 
-      // Matches: "Oct 2024 — Present", "Feb 2022 – Sep 2024", "2020 - 2022"
       const durationPattern = /(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?\d{4}\s*[-–—]\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?(?:\d{4}|present|ongoing|current)/i;
-
-      // Role keywords — broad enough to catch most titles
       const roleKeywords = /intern|developer|engineer|analyst|designer|manager|lead|consultant|associate|coordinator|specialist|executive|director|officer|architect|researcher|scientist|writer|editor|teacher|nurse|doctor|accountant|advisor|strategist|assistant|representative|head of|vp |cto|ceo|cmo|cfo/i;
 
       expLines.forEach(rawLine => {
@@ -829,7 +742,6 @@ class EnhancedResumeParser {
         const hasDate = durationPattern.test(line);
         const hasRole = roleKeywords.test(line);
 
-        // Many PDFs combine date + role on one line e.g. "Oct 2024 — Present UX Designer, Real Vision Group"
         if (hasDate && hasRole && line.length < 200) {
           if (current && current.role) experience.push(current);
           const dateMatch = line.match(durationPattern)[0];
@@ -910,14 +822,12 @@ class EnhancedResumeParser {
   async parseResume(filePath, fileType) {
     const rawText = await this.extractText(filePath, fileType);
 
-    // Quick domain pre-detection so extractSkillsCategorized can use the right map.
-    // We import inline to avoid circular deps — domainTemplates has no parser dependency.
     let detectedDomainKey = null;
     try {
       const { detectDomain } = require('./domainTemplates');
       const domainResult = detectDomain(rawText);
       detectedDomainKey  = domainResult?.key || null;
-    } catch (_) { /* domainTemplates not available — fall back to scanning all maps */ }
+    } catch (_) { /* domainTemplates not available */ }
 
     const contact        = this.extractContactInfo(rawText);
     const summary        = this.extractSummary(rawText);
@@ -927,7 +837,6 @@ class EnhancedResumeParser {
     const experience     = this.extractExperience(rawText);
     const certifications = this.extractCertifications(rawText);
 
-    // Flat deduplicated skills list — includes tech + domain + soft skills
     const allSkills = skills.all || [
       ...skills.languages,
       ...skills.frameworks,
@@ -940,7 +849,6 @@ class EnhancedResumeParser {
       ...skills.other
     ];
 
-    // Structured data (used by aiAnalyzer and atsCalculator)
     const structured = {
       contact,
       summary,

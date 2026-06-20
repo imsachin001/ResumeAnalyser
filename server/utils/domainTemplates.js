@@ -323,7 +323,6 @@ const domainTemplates = {
  * Detect the primary domain of a resume based on keyword matching
  */
 function detectDomain(resumeText) {
-  const textLower = resumeText.toLowerCase();
   const domainScores = {};
 
   // Score each domain based on keyword matches
@@ -332,11 +331,32 @@ function detectDomain(resumeText) {
     let matchedKeywords = [];
 
     template.keywords.forEach(keyword => {
-      const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
-      const matches = textLower.match(regex);
+      let flags = 'i'; // Case-insensitive by default
+      let regexStr = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      // 1. Strict Case-Sensitive constraints for high-risk single-letter tech
+      // (e.g., 'R' for Data Science, or 'C' if added later)
+      if (keyword.toLowerCase() === 'r' || keyword.toLowerCase() === 'c') {
+        flags = ''; // Remove 'i' flag for strict case sensitivity
+        regexStr = `\\b${keyword.toUpperCase()}\\b`; 
+      }
+      // 2. Symbols (+, #) don't trigger standard \b word boundaries
+      else if (keyword.includes('+') || keyword.includes('#')) {
+        regexStr = `(?<!\\w)${regexStr}(?![\\w\\+#])`;
+      }
+      // 3. Standard parsing
+      else {
+        regexStr = `\\b${regexStr}\\b`;
+      }
+
+      // Match against the original, un-lowercased text to preserve case-sensitivity rules
+      const regex = new RegExp(regexStr, flags + 'g');
+      const matches = resumeText.match(regex);
+
       if (matches) {
         score += matches.length * template.weight;
-        matchedKeywords.push(keyword);
+        // Keep the standardized lowercase version for the array
+        matchedKeywords.push(keyword.toLowerCase());
       }
     });
 
@@ -384,4 +404,3 @@ module.exports = {
   domainTemplates,
   detectDomain
 };
-

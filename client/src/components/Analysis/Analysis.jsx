@@ -24,17 +24,18 @@ const RoleCard = ({ role, index, matchPercentage, isExpanded, onToggle, getRoleD
   }, [isExpanded, role, matchPercentage]);
 
   return (
-    <div className="role-card-wrapper">
-      <div 
+    <>
+      {/* The clickable card — sits in its grid column */}
+      <div
         className={`role-card ${isExpanded ? 'expanded' : ''}`}
         onClick={onToggle}
       >
         <div className="role-name">{role}</div>
         <div className="role-match">
           <div className="role-match-bar">
-            <div 
-              className="role-match-fill" 
-              style={{ 
+            <div
+              className="role-match-fill"
+              style={{
                 width: `${matchPercentage}%`,
                 background: getScoreGradient(matchPercentage)
               }}
@@ -46,10 +47,10 @@ const RoleCard = ({ role, index, matchPercentage, isExpanded, onToggle, getRoleD
           {isExpanded ? '▲ Click to collapse' : '▼ Click for AI-powered details'}
         </div>
       </div>
-      
-      {/* Expandable Details Section */}
+
+      {/* Expanded panel — spans ALL columns via grid-column: 1 / -1 */}
       {isExpanded && (
-        <div className="role-details">
+        <div className="role-details-fullwidth">
           <div className="role-details-content">
             {loading ? (
               <div className="role-loading">
@@ -57,104 +58,104 @@ const RoleCard = ({ role, index, matchPercentage, isExpanded, onToggle, getRoleD
                 <p>🤖 AI is analyzing this role for you...</p>
               </div>
             ) : roleDetails ? (
-              <>
-                {/* Role Description */}
-                <div className="role-description">
-                  <h4>📋 Role Overview</h4>
-                  <p>{roleDetails.roleDescription}</p>
-                  <p><strong>Experience Level:</strong> {roleDetails.experienceLevel}</p>
-                  <p><strong>Industry Demand:</strong> <span style={{color: roleDetails.industryDemand === 'High' ? '#22c55e' : roleDetails.industryDemand === 'Medium' ? '#eab308' : '#ef4444'}}>{roleDetails.industryDemand}</span></p>
-                  <p><strong>Salary Range:</strong> {roleDetails.salaryRange}</p>
-                  <p><strong>Your Match Score:</strong> <strong style={{color: getScoreColor(matchPercentage)}}>{matchPercentage}%</strong></p>
-                </div>
-
-                {/* Matched Skills */}
-                <div className="role-skills-section">
-                  <h4>✅ Your Matched Skills ({roleDetails.matchedRoleSkills?.length || 0}/{roleDetails.requiredSkills?.length || 0})</h4>
-                  <div className="role-skill-tags">
-                    {roleDetails.matchedRoleSkills && roleDetails.matchedRoleSkills.length > 0 ? (
-                      roleDetails.matchedRoleSkills.map((skill, i) => (
-                        <span key={i} className="role-skill-tag matched">
-                          ✓ {skill}
-                        </span>
-                      ))
-                    ) : (
-                      <p className="no-skills">No matched skills yet - great opportunity to learn!</p>
-                    )}
+              <div className="role-details-columns">
+                {/* Left column */}
+                <div className="role-details-col">
+                  {/* Role Description */}
+                  <div className="role-description">
+                    <h4>📋 Role Overview</h4>
+                    <p>{roleDetails.roleDescription}</p>
+                    <p><strong>Experience Level:</strong> {roleDetails.experienceLevel}</p>
+                    <p><strong>Industry Demand:</strong> <span style={{color: roleDetails.industryDemand === 'High' ? '#22c55e' : roleDetails.industryDemand === 'Medium' ? '#eab308' : '#ef4444'}}>{roleDetails.industryDemand}</span></p>
+                    <p><strong>Salary Range:</strong> {roleDetails.salaryRange}</p>
+                    <p><strong>Your Match Score:</strong> <strong style={{color: getScoreColor(matchPercentage)}}>{matchPercentage}%</strong></p>
                   </div>
-                </div>
 
-                {/* Missing Skills */}
-                {roleDetails.missingRoleSkills && roleDetails.missingRoleSkills.length > 0 && (
+                  {/* Matched Skills */}
                   <div className="role-skills-section">
-                    <h4>📚 Skills to Learn ({roleDetails.missingRoleSkills.length})</h4>
+                    <h4>✅ Your Matched Skills ({roleDetails.matchedRoleSkills?.length || 0}/{roleDetails.requiredSkills?.length || 0})</h4>
                     <div className="role-skill-tags">
-                      {roleDetails.missingRoleSkills.map((skill, i) => (
-                        <span key={i} className="role-skill-tag missing">
-                          + {skill}
-                        </span>
-                      ))}
+                      {roleDetails.matchedRoleSkills && roleDetails.matchedRoleSkills.length > 0 ? (
+                        roleDetails.matchedRoleSkills.map((skill, i) => (
+                          <span key={i} className="role-skill-tag matched">✓ {skill}</span>
+                        ))
+                      ) : (
+                        <p className="no-skills">No matched skills yet — great opportunity to learn!</p>
+                      )}
                     </div>
                   </div>
-                )}
 
-                {/* Nice to Have Skills */}
-                {roleDetails.niceToHaveSkills && roleDetails.niceToHaveSkills.length > 0 && (
-                  <div className="role-skills-section">
-                    <h4>⭐ Nice-to-Have Skills</h4>
-                    <div className="role-skill-tags">
-                      {roleDetails.niceToHaveSkills.map((skill, i) => (
-                        <span key={i} className="role-skill-tag nice-to-have">
-                          {skill}
-                        </span>
-                      ))}
+                  {/* Missing Skills */}
+                  {roleDetails.missingRoleSkills && roleDetails.missingRoleSkills.length > 0 && (
+                    <div className="role-skills-section">
+                      <h4>📚 Skills to Learn ({roleDetails.missingRoleSkills.length})</h4>
+                      <div className="role-skill-tags">
+                        {roleDetails.missingRoleSkills.map((skill, i) => (
+                          <span key={i} className="role-skill-tag missing">+ {skill}</span>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {/* Company Expectations */}
-                {roleDetails.companyExpectations && roleDetails.companyExpectations.length > 0 && (
-                  <div className="role-expectations-section">
-                    <h4>🏢 What Companies Expect</h4>
-                    <ul className="role-expectations-list">
-                      {roleDetails.companyExpectations.map((expectation, i) => (
-                        <li key={i}>{expectation}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                  {/* Nice to Have */}
+                  {roleDetails.niceToHaveSkills && roleDetails.niceToHaveSkills.length > 0 && (
+                    <div className="role-skills-section">
+                      <h4>⭐ Nice-to-Have Skills</h4>
+                      <div className="role-skill-tags">
+                        {roleDetails.niceToHaveSkills.map((skill, i) => (
+                          <span key={i} className="role-skill-tag nice-to-have">{skill}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
 
-                {/* Career Advice */}
-                {roleDetails.careerAdvice && roleDetails.careerAdvice.length > 0 && (
-                  <div className="role-tips-section">
-                    <h4>💡 Personalized Career Advice</h4>
-                    <ul className="role-tips-list">
-                      {roleDetails.careerAdvice.map((tip, i) => (
-                        <li key={i}>{tip}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                {/* Right column */}
+                <div className="role-details-col">
+                  {/* Company Expectations */}
+                  {roleDetails.companyExpectations && roleDetails.companyExpectations.length > 0 && (
+                    <div className="role-expectations-section">
+                      <h4>🏢 What Companies Expect</h4>
+                      <ul className="role-expectations-list">
+                        {roleDetails.companyExpectations.map((expectation, i) => (
+                          <li key={i}>{expectation}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
-                {/* Learning Path */}
-                {roleDetails.learningPath && roleDetails.learningPath.length > 0 && (
-                  <div className="role-learning-path">
-                    <h4>🎓 Recommended Learning Path</h4>
-                    <ol className="learning-path-list">
-                      {roleDetails.learningPath.map((step, i) => (
-                        <li key={i}>{step}</li>
-                      ))}
-                    </ol>
-                  </div>
-                )}
-              </>
+                  {/* Career Advice */}
+                  {roleDetails.careerAdvice && roleDetails.careerAdvice.length > 0 && (
+                    <div className="role-tips-section">
+                      <h4>💡 Personalized Career Advice</h4>
+                      <ul className="role-tips-list">
+                        {roleDetails.careerAdvice.map((tip, i) => (
+                          <li key={i}>{tip}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Learning Path */}
+                  {roleDetails.learningPath && roleDetails.learningPath.length > 0 && (
+                    <div className="role-learning-path">
+                      <h4>🎓 Recommended Learning Path</h4>
+                      <ol className="learning-path-list">
+                        {roleDetails.learningPath.map((step, i) => (
+                          <li key={i}>{step}</li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+                </div>
+              </div>
             ) : (
               <p>Error loading role details. Please try again.</p>
             )}
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 };
 
@@ -179,7 +180,8 @@ const Analysis = ({ data, onBackToHome }) => {
     ats_score = 0,
     resume_quality_score = 0,
     resume_quality_breakdown = {},
-    ats_breakdown = {},
+    ats_breakdown = {},           // legacy alias — kept for backward compat
+    jd_match_breakdown = {},
     ats_improvements = [],
     matched_skills = [],
     missing_skills = [],
@@ -235,6 +237,23 @@ const Analysis = ({ data, onBackToHome }) => {
     if (score >= 75) return 'linear-gradient(135deg, #22c55e, #16a34a)';
     if (score >= 50) return 'linear-gradient(135deg, #eab308, #ca8a04)';
     return 'linear-gradient(135deg, #ef4444, #dc2626)';
+  };
+
+  // Convert a 0-100 percentage to a human-readable rating label
+  const getRating = (pct) => {
+    if (pct >= 85) return 'Excellent';
+    if (pct >= 65) return 'Good';
+    if (pct >= 40) return 'Fair';
+    return 'Needs Work';
+  };
+
+  // Bar gradient that MATCHES getRating thresholds exactly —
+  // so a "Good" bar is always green, "Fair" is always amber, etc.
+  // (getScoreGradient uses 75/50 cutoffs which caused "Good" bars to render yellow)
+  const getBarGradient = (pct) => {
+    if (pct >= 65) return 'linear-gradient(135deg, #22c55e, #16a34a)'; // Excellent / Good → green
+    if (pct >= 40) return 'linear-gradient(135deg, #eab308, #ca8a04)'; // Fair → amber
+    return 'linear-gradient(135deg, #ef4444, #dc2626)';                 // Needs Work → red
   };
 
   const handleSaveAnalysis = () => {
@@ -607,164 +626,109 @@ const Analysis = ({ data, onBackToHome }) => {
           </div>
         </div>
 
-        {/* Interactive Score Visualization with Circular Progress */}
+        {/* ── Three Score Circles ── */}
         <div className="scores-section">
+          {/* Resume Quality */}
+          {resume_quality_score !== undefined && (
+            <div className="score-card">
+              <div className="score-circle-container">
+                <svg className="score-circle" viewBox="0 0 200 200">
+                  <circle cx="100" cy="100" r="85" fill="none" stroke="#e5e7eb" strokeWidth="15" />
+                  <circle
+                    cx="100" cy="100" r="85" fill="none"
+                    stroke={getScoreColor(resume_quality_score)}
+                    strokeWidth="15"
+                    strokeDasharray={`${(animatedScores.resume / 100) * 534} 534`}
+                    strokeLinecap="round"
+                    transform="rotate(-90 100 100)"
+                  />
+                  <text x="100" y="93"  textAnchor="middle" className="score-text-large">{animatedScores.resume}%</text>
+                  <text x="100" y="115" textAnchor="middle" className="score-text-small">Resume Quality</text>
+                </svg>
+              </div>
+              <div className="score-tooltip">Based on structure, readability, formatting and impact.</div>
+            </div>
+          )}
 
-    {/* Resume Quality Score */}
-      {resume_quality_score !== undefined && (
-        <div className="score-card">
-          <div className="score-circle-container">
-            <svg className="score-circle" viewBox="0 0 200 200">
-              <circle
-                className="score-circle-bg"
-                cx="100"
-                cy="100"
-                r="85"
-                fill="none"
-                stroke="#e5e7eb"
-                strokeWidth="15"
-              />
-              <circle
-                className="score-circle-progress"
-                cx="100"
-                cy="100"
-                r="85"
-                fill="none"
-                stroke={getScoreColor(resume_quality_score)}
-                strokeWidth="15"
-                strokeDasharray={`${(animatedScores.resume / 100) * 534} 534`}
-                strokeLinecap="round"
-                transform="rotate(-90 100 100)"
-              />
-              <text x="100" y="95" textAnchor="middle" className="score-text-large">
-                {animatedScores.resume}%
-              </text>
-              <text x="100" y="115" textAnchor="middle" className="score-text-small">
-                Resume Quality
-              </text>
-            </svg>
-          </div>
+          {/* Job Match */}
+          {match_score !== undefined && (
+            <div className="score-card">
+              <div className="score-circle-container">
+                <svg className="score-circle" viewBox="0 0 200 200">
+                  <circle cx="100" cy="100" r="85" fill="none" stroke="#e5e7eb" strokeWidth="15" />
+                  <circle
+                    cx="100" cy="100" r="85" fill="none"
+                    stroke={getScoreColor(match_score)}
+                    strokeWidth="15"
+                    strokeDasharray={`${(animatedScores.match / 100) * 534} 534`}
+                    strokeLinecap="round"
+                    transform="rotate(-90 100 100)"
+                  />
+                  <text x="100" y="93"  textAnchor="middle" className="score-text-large">{animatedScores.match}%</text>
+                  <text x="100" y="115" textAnchor="middle" className="score-text-small">Job Match</text>
+                </svg>
+              </div>
+              <div className="score-tooltip">Based on job description skills, experience and domain alignment.</div>
+            </div>
+          )}
 
-          <div className="score-tooltip">
-            <p>Based on structure, readability, formatting and impact.</p>
-          </div>
+          {/* ATS Compatibility */}
+          {ats_score !== undefined && (
+            <div className="score-card">
+              <div className="score-circle-container">
+                <svg className="score-circle" viewBox="0 0 200 200">
+                  <circle cx="100" cy="100" r="85" fill="none" stroke="#e5e7eb" strokeWidth="15" />
+                  <circle
+                    cx="100" cy="100" r="85" fill="none"
+                    stroke={getScoreColor(ats_score)}
+                    strokeWidth="15"
+                    strokeDasharray={`${(animatedScores.ats / 100) * 534} 534`}
+                    strokeLinecap="round"
+                    transform="rotate(-90 100 100)"
+                  />
+                  <text x="100" y="93"  textAnchor="middle" className="score-text-large">{animatedScores.ats}%</text>
+                  <text x="100" y="115" textAnchor="middle" className="score-text-small">ATS Compatibility</text>
+                </svg>
+              </div>
+              <div className="score-tooltip">Overall score combining resume quality and job relevance.</div>
+            </div>
+          )}
         </div>
-      )}
 
-
-      {/* Job Match Score */}
-      {match_score !== undefined && (
-        <div className="score-card">
-          <div className="score-circle-container">
-            <svg className="score-circle" viewBox="0 0 200 200">
-              <circle
-                className="score-circle-bg"
-                cx="100"
-                cy="100"
-                r="85"
-                fill="none"
-                stroke="#e5e7eb"
-                strokeWidth="15"
-              />
-              <circle
-                className="score-circle-progress"
-                cx="100"
-                cy="100"
-                r="85"
-                fill="none"
-                stroke={getScoreColor(match_score)}
-                strokeWidth="15"
-                strokeDasharray={`${(animatedScores.match / 100) * 534} 534`}
-                strokeLinecap="round"
-                transform="rotate(-90 100 100)"
-              />
-              <text x="100" y="95" textAnchor="middle" className="score-text-large">
-                {animatedScores.match}%
-              </text>
-              <text x="100" y="115" textAnchor="middle" className="score-text-small">
-                Job Match
-              </text>
-            </svg>
-          </div>
-
-          <div className="score-tooltip">
-            <p>Based on job description skills, experience and domain alignment.</p>
-          </div>
-        </div>
-      )}
-
-
-      {/* Overall ATS Compatibility */}
-      {ats_score !== undefined && (
-        <div className="score-card">
-          <div className="score-circle-container">
-            <svg className="score-circle" viewBox="0 0 200 200">
-              <circle
-                className="score-circle-bg"
-                cx="100"
-                cy="100"
-                r="85"
-                fill="none"
-                stroke="#e5e7eb"
-                strokeWidth="15"
-              />
-              <circle
-                className="score-circle-progress"
-                cx="100"
-                cy="100"
-                r="85"
-                fill="none"
-                stroke={getScoreColor(ats_score)}
-                strokeWidth="15"
-                strokeDasharray={`${(animatedScores.ats / 100) * 534} 534`}
-                strokeLinecap="round"
-                transform="rotate(-90 100 100)"
-              />
-              <text x="100" y="95" textAnchor="middle" className="score-text-large">
-                {animatedScores.ats}%
-              </text>
-              <text x="100" y="115" textAnchor="middle" className="score-text-small">
-                ATS Compatibility
-              </text>
-            </svg>
-          </div>
-
-          <div className="score-tooltip">
-            <p>Overall score combining resume quality and job relevance.</p>
-          </div>
-        </div>
-      )}
-
-    </div>
-
-        {/* Score Breakdown Details */}
+        {/* ── Score Breakdown + Formula ── */}
         <div className="score-breakdown-section">
+
           {/* Resume Quality Breakdown */}
           <div className="breakdown-card">
             <h3>📋 Resume Quality Breakdown <span className="breakdown-total">({resume_quality_score}/100)</span></h3>
             <div className="breakdown-rows">
-              {[
-                { label: 'Contact',      key: 'contact',        max: 10 },
-                { label: 'Sections',     key: 'sections',       max: 15 },
-                { label: 'Formatting',   key: 'formatting',     max: 10 },
-                { label: 'Action Verbs', key: 'actionVerbs',    max: 10 },
-                { label: 'Experience',   key: 'experienceDepth',max: 15 },
-              ].map(({ label, key, max }) => {
-                const raw   = resume_quality_breakdown[key] ?? 0;
-                const pct   = Math.round((raw / max) * 100);
-                return (
-                  <div key={key} className="breakdown-row">
-                    <span className="breakdown-label">{label}</span>
-                    <div className="breakdown-bar-wrap">
-                      <div
-                        className="breakdown-bar-fill"
-                        style={{ width: `${pct}%`, background: getScoreGradient(pct) }}
-                      />
+              {(() => {
+                const rqb = Object.keys(resume_quality_breakdown).length > 0
+                  ? resume_quality_breakdown
+                  : ats_breakdown;
+                const rows = [
+                  { label: 'Contact Info',        key: 'contact',         max: 15 },
+                  { label: 'Section Completeness', key: 'sections',        max: 25 },
+                  { label: 'Formatting',           key: 'formatting',      max: 15 },
+                  { label: 'Action Verbs',         key: 'actionVerbs',     max: 20 },
+                  { label: 'Experience Depth',     key: 'experienceDepth', max: 25 },
+                ];
+                return rows.map(({ label, key, max }) => {
+                  const raw = rqb[key] ?? 0;
+                  const pct = Math.round((raw / max) * 100);
+                  return (
+                    <div key={key} className="breakdown-row">
+                      <span className="breakdown-label">{label}</span>
+                      <div className="breakdown-bar-wrap">
+                        <div className="breakdown-bar-fill" style={{ width: `${pct}%`, background: getBarGradient(pct) }} />
+                      </div>
+                      <span className={`breakdown-rating rating-${getRating(pct).toLowerCase()}`}>
+                        {getRating(pct)}
+                      </span>
                     </div>
-                    <span className="breakdown-score">{raw}/{max}</span>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           </div>
 
@@ -773,21 +737,25 @@ const Analysis = ({ data, onBackToHome }) => {
             <h3>🎯 JD Match Breakdown <span className="breakdown-total">({match_score}/100)</span></h3>
             <div className="breakdown-rows">
               {[
-                { label: 'Skills Match',  pct: Math.min(Math.round((match_score * 0.625)), 100), display: '25 pts weight' },
-                { label: 'Domain Match',  pct: Math.min(Math.round((match_score * 0.25)),  100), display: '10 pts weight' },
-                { label: 'Keywords',      pct: Math.min(Math.round((match_score * 0.125)), 100), display: '5 pts weight'  },
-              ].map(({ label, pct, display }) => (
-                <div key={label} className="breakdown-row">
-                  <span className="breakdown-label">{label}</span>
-                  <div className="breakdown-bar-wrap">
-                    <div
-                      className="breakdown-bar-fill"
-                      style={{ width: `${pct}%`, background: getScoreGradient(pct) }}
-                    />
+                { label: 'Skills Match',          key: 'skillsMatch',         max: 50 },
+                { label: 'Experience Relevance',  key: 'experienceRelevance', max: 30 },
+                { label: 'Education',             key: 'educationMatch',       max: 10 },
+                { label: 'Professional Presence', key: 'professionalPresence', max: 10 },
+              ].map(({ label, key, max }) => {
+                const raw = jd_match_breakdown[key] ?? 0;
+                const pct = Math.round((raw / max) * 100);
+                return (
+                  <div key={key} className="breakdown-row">
+                    <span className="breakdown-label">{label}</span>
+                    <div className="breakdown-bar-wrap">
+                      <div className="breakdown-bar-fill" style={{ width: `${pct}%`, background: getBarGradient(pct) }} />
+                    </div>
+                    <span className={`breakdown-rating rating-${getRating(pct).toLowerCase()}`}>
+                      {getRating(pct)}
+                    </span>
                   </div>
-                  <span className="breakdown-score">{display}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -799,13 +767,13 @@ const Analysis = ({ data, onBackToHome }) => {
                 <span className="formula-value" style={{ color: getScoreColor(resume_quality_score) }}>{resume_quality_score}</span>
                 <span className="formula-label">Resume Quality</span>
               </span>
-              <span className="formula-op">×&nbsp;60%</span>
+              <span className="formula-op">× 60%</span>
               <span className="formula-op">+</span>
               <span className="formula-term">
                 <span className="formula-value" style={{ color: getScoreColor(match_score) }}>{match_score}</span>
                 <span className="formula-label">JD Match</span>
               </span>
-              <span className="formula-op">×&nbsp;40%</span>
+              <span className="formula-op">× 40%</span>
               <span className="formula-op">=</span>
               <span className="formula-term formula-result">
                 <span className="formula-value" style={{ color: getScoreColor(ats_score) }}>{ats_score}</span>
@@ -901,19 +869,19 @@ const Analysis = ({ data, onBackToHome }) => {
             <h2>🎯 Suggested Job Roles</h2>
             <div className="roles-grid">
               {suggested_roles.map((roleObj, index) => {
-                // role can be a plain string OR an object {role, fit_score, reasoning}
                 const roleName = typeof roleObj === 'string' ? roleObj : (roleObj.role || String(roleObj));
                 const matchPercentage = typeof roleObj === 'object' && roleObj.fit_score != null
                   ? roleObj.fit_score
                   : Math.max(95 - (index * 8), 60);
+                const isExpanded = expandedRole === index;
                 return (
                   <RoleCard
                     key={index}
                     role={roleName}
                     index={index}
                     matchPercentage={matchPercentage}
-                    isExpanded={expandedRole === index}
-                    onToggle={() => setExpandedRole(expandedRole === index ? null : index)}
+                    isExpanded={isExpanded}
+                    onToggle={() => setExpandedRole(isExpanded ? null : index)}
                     getRoleDetails={getRoleDetails}
                     getScoreColor={getScoreColor}
                     getScoreGradient={getScoreGradient}
@@ -1010,7 +978,7 @@ const Analysis = ({ data, onBackToHome }) => {
                 </div>
               )}
               {missing_skills.length > 0 && (
-                <div className="skills-box">
+                <div className="skills-box missing-box">
                   <h3>❌ Missing Skills</h3>
                   <div className="skills-tags">
                     {selectedSkillCategory === 'all'
