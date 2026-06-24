@@ -288,8 +288,7 @@ CRITICAL RULES:
     const experienceTimeline = atsCalculator.calculateExperienceTimeline(expArray);
 
     if (!apiKey) {
-      console.log('No Gemini API key — using enhanced fallback analysis');
-      return this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription);
+      throw new Error('GEMINI_API_KEY is not configured. Analysis unavailable.');
     }
 
     try {
@@ -306,28 +305,26 @@ CRITICAL RULES:
       const rawText  = response.text();
 
       let analysisData;
-      let parseFailed = false;
       try {
         const cleaned = rawText.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
         analysisData  = JSON.parse(cleaned);
       } catch (parseErr) {
-        console.error('JSON parse error:', parseErr.message);
-        analysisData = this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription);
-        parseFailed = true;
+        console.error('JSON parse error from Gemini:', parseErr.message);
+        throw new Error('Gemini returned an unexpected response. Please try again.');
       }
 
       let atsImprovements = [];
       try {
         atsImprovements = await this.generateAtsImprovements(parsedData, resumeQuality, detectedDomain, jobDescription, apiKey);
       } catch (e) {
-        console.error('ATS improvements error:', e.message);
-        atsImprovements = this.createFallbackAtsImprovements(resumeQuality, detectedDomain);
+        // Non-critical: ATS cards are bonus content; the main analysis is already good.
+        // Log and continue with empty array rather than failing the whole request.
+        console.error('ATS improvements generation failed (non-fatal):', e.message);
+        atsImprovements = [];
       }
 
       let match_score;
-      if (parseFailed) {
-        match_score = analysisData.match_score;
-      } else {
+      {
         const sanitizedRoles = this.sanitizeSuggestedRoles(analysisData.suggested_roles);
         analysisData.suggested_roles = sanitizedRoles;
 
@@ -362,7 +359,7 @@ CRITICAL RULES:
         }
       }
 
-      const structured    = parsedData.structured || {};
+      const structured = parsedData.structured || {};
       const profExpCount  = (structured.experience || []).filter(e => e.type === 'professional').length;
       const projCount     = (structured.projects   || []).length;
       const expSummary    = profExpCount > 0
@@ -395,7 +392,10 @@ CRITICAL RULES:
 
     } catch (err) {
       console.error('Gemini API error:', err.message);
-      return this.createEnhancedFallbackAnalysis(parsedData, detectedDomain, resumeQuality, experienceTimeline, hasJD, jobDescription);
+      // Re-throw — do NOT fall back to rule-based analysis.
+      // The server's 500 response will trigger the "Server is busy" redirect
+      // in the frontend (Analysis.jsx) rather than silently showing degraded results.
+      throw err;
     }
   }
 

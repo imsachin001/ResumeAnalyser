@@ -581,16 +581,24 @@ const Analysis = ({ data, onBackToHome }) => {
     }
   };
 
-  // Early return if no data - must be after all hooks
+  // Early return if no data
   if (!data) {
+    // If there's an explicit server-side error flag, show the "busy" banner
+    // then send the user home. This is triggered when Gemini is unavailable.
+    const isBusy = data === null;   // null = explicit error, undefined = never loaded
     return (
       <div className="analysis-page">
-        <div className="analysis-container">
-          <h1>No Analysis Data</h1>
-          <p>Please upload a resume to analyze.</p>
-          <button onClick={onBackToHome} className="back-button">
-            Back to Home
-          </button>
+        <div className="analysis-container" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
+          <div className="server-busy-alert">
+            <span className="server-busy-icon">⚡</span>
+            <h2>Our servers are a little busy right now</h2>
+            <p>
+              We couldn't complete your analysis at this moment. This usually resolves in a few seconds — please try again shortly.
+            </p>
+            <button onClick={onBackToHome} className="action-btn back-btn" style={{ marginTop: '1.5rem' }}>
+              ← Back to Home
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -603,7 +611,6 @@ const Analysis = ({ data, onBackToHome }) => {
           <h1>📊 Resume Analysis Results</h1>
           {parsed_data.name && <p className="candidate-name">{parsed_data.name}</p>}
           {detected_domain && <p className="domain-badge">🎯 {detected_domain}</p>}
-          {experience_summary && <p className="experience-badge">💼 {experience_summary}</p>}
           
           {/* Action Buttons */}
           <div className="action-buttons">
