@@ -256,6 +256,11 @@ const Analysis = ({ data, onBackToHome }) => {
     return 'linear-gradient(135deg, #ef4444, #dc2626)';                 // Needs Work → red
   };
 
+  const getContributionWidth = (raw, sectionMax) => {
+    if (!sectionMax) return 0;
+    return Math.min(Math.max((raw / sectionMax) * 100, 0), 100);
+  };
+
   const handleSaveAnalysis = () => {
     if (!data) return;
 
@@ -723,11 +728,12 @@ const Analysis = ({ data, onBackToHome }) => {
                 return rows.map(({ label, key, max }) => {
                   const raw = rqb[key] ?? 0;
                   const pct = Math.round((raw / max) * 100);
+                  const contributionWidth = getContributionWidth(raw, max);
                   return (
                     <div key={key} className="breakdown-row">
                       <span className="breakdown-label">{label}</span>
                       <div className="breakdown-bar-wrap">
-                        <div className="breakdown-bar-fill" style={{ width: `${pct}%`, background: getBarGradient(pct) }} />
+                        <div className="breakdown-bar-fill" style={{ width: `${contributionWidth}%`, background: getBarGradient(pct) }} />
                       </div>
                       <span className={`breakdown-rating rating-${getRating(pct).toLowerCase()}`}>
                         {getRating(pct)}
@@ -751,11 +757,12 @@ const Analysis = ({ data, onBackToHome }) => {
               ].map(({ label, key, max }) => {
                 const raw = jd_match_breakdown[key] ?? 0;
                 const pct = Math.round((raw / max) * 100);
+                const contributionWidth = getContributionWidth(raw, max);
                 return (
                   <div key={key} className="breakdown-row">
                     <span className="breakdown-label">{label}</span>
                     <div className="breakdown-bar-wrap">
-                      <div className="breakdown-bar-fill" style={{ width: `${pct}%`, background: getBarGradient(pct) }} />
+                      <div className="breakdown-bar-fill" style={{ width: `${contributionWidth}%`, background: getBarGradient(pct) }} />
                     </div>
                     <span className={`breakdown-rating rating-${getRating(pct).toLowerCase()}`}>
                       {getRating(pct)}
