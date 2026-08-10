@@ -8,6 +8,8 @@ require('dotenv').config();
 const resumeParser = require('./utils/resumeParserEnhanced');
 const aiAnalyzer = require('./utils/aiAnalyzer');
 const { clerkMiddleware, requireAuth } = require('./middleware/authMiddleware');
+const { initRedis } = require('./utils/redisClient');
+const { computeCacheKey, getCachedResult, setCachedResult, getCacheStats, resetCacheStats } = require('./utils/cacheService');
 
 const app = express();
 
@@ -142,6 +144,22 @@ app.post('/api/analyze', requireAuth, upload.single('resume'), async (req, res) 
     const fileType = path.extname(req.file.originalname).toLowerCase().slice(1);
     const jobDescription = req.body.jobDescription || null;
 
+    // ─── Redis Cache: compute key from raw file bytes + JD ───────────────────
+    const fileBuffer = await fs.readFile(filePath);
+    const cacheKey = computeCacheKey(fileBuffer, jobDescription);
+
+    const cachedResult = await getCachedResult(cacheKey);
+    if (cachedResult) {
+      // Serve from cache — skip parsing & Gemini entirely
+      await deleteFileWithRetry(filePath);
+      return res.json({
+        success: true,
+        data: cachedResult,
+        cached: true   // handy flag so the frontend/logs can confirm it's cached
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     console.log(`Parsing resume: ${req.file.originalname}`);
 
     // Step 1: Parse resume
@@ -209,13 +227,18 @@ app.post('/api/analyze', requireAuth, upload.single('resume'), async (req, res) 
     }
     analysisResult.parsed_data.resume_title = fallbackTitle;
 
+    // ─── Redis Cache: store result for next time ──────────────────────────────
+    await setCachedResult(cacheKey, analysisResult);
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Clean up uploaded file
     await deleteFileWithRetry(filePath);
 
     // Return analysis result
     res.json({
       success: true,
-      data: analysisResult
+      data: analysisResult,
+      cached: false
     });
 
   } catch (error) {
@@ -276,6 +299,39 @@ app.post('/api/role-details', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Cache Statistics endpoints ──────────────────────────────────────────────
+
+/**
+ * GET /api/cache/stats
+ * Returns live hit/miss counters and hit-rate percentage.
+ * Example response:
+ *   { success: true, stats: { hits: 72, misses: 28, total: 100, hitRate: "72.00", redisAvailable: true } }
+ */
+app.get('/api/cache/stats', async (req, res) => {
+  try {
+    const stats = await getCacheStats();
+    console.log('📊 Cache stats requested:', stats);
+    res.json({ success: true, stats });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/cache/stats
+ * Resets hit/miss counters back to zero (does NOT clear cached results).
+ */
+app.delete('/api/cache/stats', async (req, res) => {
+  try {
+    await resetCacheStats();
+    res.json({ success: true, message: 'Cache statistics reset to zero' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Server error:', err);
@@ -287,10 +343,15 @@ app.use((err, req, res, next) => {
 
 // Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 CVlyze API server running on http://localhost:${PORT}`);
-  console.log(`📁 Upload folder: ${UPLOAD_FOLDER}`);
-  console.log(`🔑 Gemini API configured: ${!!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim())}`);
+
+// Initialise Redis (non-blocking — app starts even if Redis is unavailable)
+initRedis().then(() => {
+  app.listen(PORT, () => {
+    console.log(`🚀 CVlyze API server running on http://localhost:${PORT}`);
+    console.log(`📁 Upload folder: ${UPLOAD_FOLDER}`);
+    console.log(`🔑 Gemini API configured: ${!!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim())}`);
+    console.log(`🗄️  Redis URL: ${process.env.REDIS_URL || 'redis://localhost:6379'}`);
+  });
 });
 
 module.exports = app;
