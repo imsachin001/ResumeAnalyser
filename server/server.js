@@ -1,327 +1,255 @@
 const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs').promises;
+const cors    = require('cors');
+const multer  = require('multer');
+const path    = require('path');
+const fs      = require('fs').promises;
+const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
-const resumeParser = require('./utils/resumeParserEnhanced');
-const aiAnalyzer = require('./utils/aiAnalyzer');
 const { clerkMiddleware, requireAuth } = require('./middleware/authMiddleware');
-const { initRedis } = require('./utils/redisClient');
-const { computeCacheKey, getCachedResult, setCachedResult, getCacheStats, resetCacheStats } = require('./utils/cacheService');
+const { initRedis }                    = require('./utils/redisClient');
+const {
+  computeCacheKey,
+  getCachedResult,
+  getCacheStats,
+  resetCacheStats,
+} = require('./utils/cacheService');
+const { resumeQueue } = require('./utils/queue');
+const { Job } = require('bullmq');
 
 const app = express();
 
-// Middleware
-const corsOrigin = process.env.CORS_ORIGIN || 'https://cvlyze-app.vercel.app';
-app.use(cors({
-    origin: true,
-    credentials: true
-}));
+// ─── Middleware ───────────────────────────────────────────────────────────────
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(clerkMiddleware({ publishableKey: process.env.CLERK_PUBLISHABLE_KEY }));
 
-// Configuration
-const UPLOAD_FOLDER = 'uploads';
+// ─── Config ───────────────────────────────────────────────────────────────────
+const UPLOAD_FOLDER      = 'uploads';
 const ALLOWED_EXTENSIONS = ['pdf', 'docx', 'doc'];
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_FILE_SIZE      = 10 * 1024 * 1024; // 10 MB
 
-// Create upload folder if it doesn't exist
-const createUploadFolder = async () => {
-  try {
-    await fs.mkdir(UPLOAD_FOLDER, { recursive: true });
-  } catch (error) {
-    console.error('Error creating upload folder:', error);
-  }
-};
+// Create upload folder if needed
+fs.mkdir(UPLOAD_FOLDER, { recursive: true }).catch(() => {});
 
-createUploadFolder();
-
-// Multer configuration for file uploads
+// ─── Multer ───────────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOAD_FOLDER);
+  destination: (_req, _file, cb) => cb(null, UPLOAD_FOLDER),
+  filename:    (_req, file,  cb) => {
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `${unique}-${file.originalname}`);
   },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
-  }
 });
 
 const upload = multer({
-  storage: storage,
+  storage,
   limits: { fileSize: MAX_FILE_SIZE },
-  fileFilter: (req, file, cb) => {
+  fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase().slice(1);
-    if (ALLOWED_EXTENSIONS.includes(ext)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only PDF and DOCX are allowed'));
-    }
-  }
+    ALLOWED_EXTENSIONS.includes(ext)
+      ? cb(null, true)
+      : cb(new Error('Invalid file type. Only PDF and DOCX are allowed'));
+  },
 });
 
-const validateResumeContent = (parsedData) => {
-  const rawText = parsedData?.raw_text || '';
-  const contact = parsedData?.contact || {};
-  const skillsCount = parsedData?.skills_list?.length || 0;
-  const hasProjects = (parsedData?.projects || []).length > 0;
-  const hasEducation = (parsedData?.education || []).length > 0;
-  const hasExperience = (parsedData?.experience || []).length > 0;
-  const hasSummary = !!parsedData?.summary;
-  const hasContact = !!(contact.email || contact.phone || contact.linkedin || contact.github || contact.portfolio);
-
-  const trimmedLength = rawText.replace(/\s/g, '').length;
-  const hasEnoughText = trimmedLength >= 200;
-
-  const signals = [
-    hasContact,
-    skillsCount >= 1,
-    hasProjects,
-    hasEducation,
-    hasSummary
-  ];
-
-  const signalCount = signals.filter(Boolean).length;
-  const isValid = hasEnoughText && signalCount >= 2;
-
-  return {
-    isValid,
-    details: {
-      hasEnoughText,
-      signalCount,
-      skillsCount,
-      hasContact,
-      hasProjects,
-      hasEducation,
-      hasExperience,
-      hasSummary
-    }
-  };
-};
-
-// Helper function to delete file with retry
+// ─── Helper — delete file with retry ─────────────────────────────────────────
 const deleteFileWithRetry = async (filePath, retries = 3) => {
   for (let i = 0; i < retries; i++) {
     try {
-      await new Promise(resolve => setTimeout(resolve, 100 * i)); // Wait before retry
+      await new Promise(r => setTimeout(r, 100 * i));
       await fs.unlink(filePath);
       return;
-    } catch (error) {
-      if (i === retries - 1) {
+    } catch {
+      if (i === retries - 1)
         console.warn(`Warning: Could not delete temporary file ${filePath}`);
-      }
     }
   }
 };
 
-// Routes
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
+// ── Health check ──────────────────────────────────────────────────────────────
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'healthy', message: 'CVlyze API is running' });
+});
+
+// ── Config check ──────────────────────────────────────────────────────────────
+app.get('/api/config/check', (_req, res) => {
+  const hasApiKey = !!(process.env.GEMINI_API_KEY?.trim());
   res.json({
-    status: 'healthy',
-    message: 'CVlyze API is running'
+    configured: hasApiKey,
+    message: hasApiKey ? 'Gemini API key is configured' : 'Gemini API key is missing',
   });
 });
 
-// Main analysis endpoint
+// ── POST /api/analyze ─────────────────────────────────────────────────────────
+/**
+ * Accepts the resume upload, checks Redis cache, and either:
+ *   A) Returns the cached result immediately (200 + cached:true), or
+ *   B) Enqueues a BullMQ job and returns 202 Accepted with { jobId }.
+ *
+ * The caller should then poll GET /api/jobs/:jobId until status === 'completed'.
+ */
 app.post('/api/analyze', requireAuth, upload.single('resume'), async (req, res) => {
   let filePath = null;
 
   try {
-    // Check if file is present
     if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: 'No resume file provided'
-      });
+      return res.status(400).json({ success: false, error: 'No resume file provided' });
     }
 
     filePath = req.file.path;
-    const fileType = path.extname(req.file.originalname).toLowerCase().slice(1);
+    const fileType       = path.extname(req.file.originalname).toLowerCase().slice(1);
     const jobDescription = req.body.jobDescription || null;
+    const userId         = req.auth?.userId || 'anonymous';
+    const resumeTitle    = path.parse(req.file.originalname).name || 'Untitled Resume';
 
-    // ─── Redis Cache: compute key from raw file bytes + JD ───────────────────
+    // ── Redis cache check ────────────────────────────────────────────────────
     const fileBuffer = await fs.readFile(filePath);
-    const cacheKey = computeCacheKey(fileBuffer, jobDescription);
+    const cacheKey   = computeCacheKey(fileBuffer, jobDescription);
 
     const cachedResult = await getCachedResult(cacheKey);
     if (cachedResult) {
-      // Serve from cache — skip parsing & Gemini entirely
+      // Serve from cache — skip queue entirely
       await deleteFileWithRetry(filePath);
-      return res.json({
-        success: true,
-        data: cachedResult,
-        cached: true   // handy flag so the frontend/logs can confirm it's cached
-      });
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    console.log(`Parsing resume: ${req.file.originalname}`);
-
-    // Step 1: Parse resume
-    const parsedData = await resumeParser.parseResume(filePath, fileType);
-
-    const validation = validateResumeContent(parsedData);
-    if (!validation.isValid) {
-      await deleteFileWithRetry(filePath);
-      return res.status(400).json({
-        success: false,
-        error: 'Uploaded file does not look like a resume. Please upload a resume with contact details and skills/experience sections.',
-        details: validation.details
-      });
-    }
-    
-    // DEBUG: Log parsed data
-    console.log('\n=== PARSED RESUME DATA ===');
-    console.log('Name:', parsedData.name);
-    console.log('Email:', parsedData.contact?.email);
-    console.log('Skills List Length:', parsedData.skills_list?.length);
-    console.log('Skills List:', parsedData.skills_list);
-    console.log('Has Skills Section:', !!parsedData.sections?.skills);
-    console.log('Has Projects Section:', !!parsedData.sections?.projects);
-    console.log('Has Experience Section:', !!parsedData.sections?.experience);
-    if (parsedData.structured) {
-      console.log('Structured Skills List:', parsedData.structured.skills_list);
-    }
-    console.log('=========================\n');
-
-    // Step 2: Analyze with AI (if API key is available)
-    let analysisResult;
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-
-    if (geminiApiKey && geminiApiKey.trim()) {
-      console.log('Analyzing with Gemini AI...');
-      analysisResult = await aiAnalyzer.analyzeResume(parsedData, jobDescription, geminiApiKey);
-    } else {
-      console.log('No Gemini API key found, using rule-based analysis...');
-      // Fallback to rule-based analysis
-      const atsScore = aiAnalyzer.calculateAtsScore(parsedData);
-      analysisResult = {
-        ats_score: atsScore,
-        match_score: null,
-        summary: 'Basic analysis completed. Add Gemini API key for detailed AI analysis.',
-        recommendations: [
-          'Add Gemini API key for comprehensive analysis',
-          'Ensure all contact information is present',
-          'Add more skills to your resume',
-          'Include quantifiable achievements'
-        ],
-        parsed_data: {
-          name: parsedData.name,
-          contact: parsedData.contact,
-          skills_list: parsedData.skills_list || []
-        }
-      };
+      return res.json({ success: true, data: cachedResult, cached: true });
     }
 
-    // Ensure resume title/name is available for saving
-    const fallbackTitle = path.parse(req.file.originalname).name || 'Untitled Resume';
-    const extractedTitle = parsedData.contact?.name || parsedData.name || fallbackTitle;
-    analysisResult.parsed_data = analysisResult.parsed_data || {};
-    if (!analysisResult.parsed_data.name) {
-      analysisResult.parsed_data.name = extractedTitle;
-    }
-    analysisResult.parsed_data.resume_title = fallbackTitle;
+    // ── Enqueue BullMQ job ────────────────────────────────────────────────────
+    // We store the *file path* in the job data (not the raw buffer).
+    // The worker reads the file from disk; after the worker runs it deletes it.
+    // In production you would upload the file to S3/Cloudinary first and store
+    // the URL here instead of a local path.
+    const job = await resumeQueue.add(
+      'analyze-resume',               // job name (for UI / filtering)
+      {
+        filePath,                     // local path — worker will read + delete
+        fileType,
+        jobDescription,
+        userId,
+        cacheKey,
+        resumeTitle,
+      },
+      {
+        jobId: uuidv4(),              // deterministic so we can look it up
+      }
+    );
 
-    // ─── Redis Cache: store result for next time ──────────────────────────────
-    await setCachedResult(cacheKey, analysisResult);
-    // ─────────────────────────────────────────────────────────────────────────
+    console.log(`📬 Job ${job.id} enqueued for user ${userId} — file: ${req.file.originalname}`);
 
-    // Clean up uploaded file
-    await deleteFileWithRetry(filePath);
-
-    // Return analysis result
-    res.json({
+    // ── 202 Accepted ─────────────────────────────────────────────────────────
+    return res.status(202).json({
       success: true,
-      data: analysisResult,
-      cached: false
+      message: 'Resume analysis started. Poll the status endpoint for results.',
+      jobId:   job.id,
+      pollUrl: `/api/jobs/${job.id}`,
     });
 
   } catch (error) {
-    console.error('Analysis error:', error);
-
-    // Clean up file if error occurs
-    if (filePath) {
-      await deleteFileWithRetry(filePath);
-    }
-
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Analysis failed'
-    });
+    console.error('Error enqueuing analysis job:', error);
+    if (filePath) await deleteFileWithRetry(filePath);
+    return res.status(500).json({ success: false, error: error.message || 'Failed to start analysis' });
   }
 });
 
-// Check configuration endpoint
-app.get('/api/config/check', (req, res) => {
-  const geminiApiKey = process.env.GEMINI_API_KEY;
-  const hasApiKey = !!(geminiApiKey && geminiApiKey.trim());
+// ── GET /api/jobs/:jobId ──────────────────────────────────────────────────────
+/**
+ * Poll this endpoint after POST /api/analyze returns 202.
+ *
+ * Response shape:
+ *   { success, jobId, status, progress, data?, error?, processingMs? }
+ *
+ * status can be:
+ *   'waiting'    — queued, not yet picked up
+ *   'active'     — worker is currently processing
+ *   'completed'  — finished; `data` contains the full analysis result
+ *   'failed'     — processing failed; `error` contains the reason
+ *   'delayed'    — waiting for a retry backoff
+ *   'unknown'    — job not found
+ */
+app.get('/api/jobs/:jobId', requireAuth, async (req, res) => {
+  try {
+    const { jobId } = req.params;
 
-  res.json({
-    configured: hasApiKey,
-    message: hasApiKey ? 'Gemini API key is configured' : 'Gemini API key is missing'
-  });
+    // BullMQ's Job.fromId() takes the Queue instance as the first argument
+    const job = await Job.fromId(resumeQueue, jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        jobId,
+        status: 'unknown',
+        message: 'Job not found. It may have expired or never existed.',
+      });
+    }
+
+    const state    = await job.getState();   // 'waiting' | 'active' | 'completed' | 'failed' | 'delayed'
+    const progress = job.progress ?? 0;
+
+    const response = {
+      success:  true,
+      jobId,
+      status:   state,
+      progress,
+    };
+
+    if (state === 'completed') {
+      response.data    = job.returnvalue;
+      response.cached  = false;
+    }
+
+    if (state === 'failed') {
+      response.error = job.failedReason;
+    }
+
+    return res.json(response);
+
+  } catch (err) {
+    console.error('Error fetching job status:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-// Get detailed role information endpoint
+// ── POST /api/role-details ────────────────────────────────────────────────────
+const aiAnalyzer = require('./utils/aiAnalyzer');
+
 app.post('/api/role-details', requireAuth, async (req, res) => {
   try {
     const { roleName, userSkills, matchedSkills, missingSkills } = req.body;
 
     if (!roleName) {
-      return res.status(400).json({
-        success: false,
-        error: 'Role name is required'
-      });
+      return res.status(400).json({ success: false, error: 'Role name is required' });
     }
 
     console.log(`📊 Generating role details for: ${roleName}`);
-
     const roleDetails = await aiAnalyzer.generateRoleDetails(
       roleName,
-      userSkills || [],
+      userSkills    || [],
       matchedSkills || [],
       missingSkills || []
     );
-
     res.json(roleDetails);
 
   } catch (error) {
     console.error('Error fetching role details:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to generate role details'
-    });
+    res.status(500).json({ success: false, error: error.message || 'Failed to generate role details' });
   }
 });
 
-// ─── Cache Statistics endpoints ──────────────────────────────────────────────
-
-/**
- * GET /api/cache/stats
- * Returns live hit/miss counters and hit-rate percentage.
- * Example response:
- *   { success: true, stats: { hits: 72, misses: 28, total: 100, hitRate: "72.00", redisAvailable: true } }
- */
-app.get('/api/cache/stats', async (req, res) => {
+// ── Cache stats ───────────────────────────────────────────────────────────────
+app.get('/api/cache/stats', async (_req, res) => {
   try {
     const stats = await getCacheStats();
-    console.log('📊 Cache stats requested:', stats);
     res.json({ success: true, stats });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-/**
- * DELETE /api/cache/stats
- * Resets hit/miss counters back to zero (does NOT clear cached results).
- */
-app.delete('/api/cache/stats', async (req, res) => {
+app.delete('/api/cache/stats', async (_req, res) => {
   try {
     await resetCacheStats();
     res.json({ success: true, message: 'Cache statistics reset to zero' });
@@ -330,27 +258,43 @@ app.delete('/api/cache/stats', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({
-    success: false,
-    error: err.message || 'Internal server error'
-  });
+// ── Queue stats (bonus — handy for monitoring) ────────────────────────────────
+/**
+ * GET /api/queue/stats
+ * Returns a snapshot of the BullMQ queue depth.
+ */
+app.get('/api/queue/stats', async (_req, res) => {
+  try {
+    const [waiting, active, completed, failed, delayed] = await Promise.all([
+      resumeQueue.getWaitingCount(),
+      resumeQueue.getActiveCount(),
+      resumeQueue.getCompletedCount(),
+      resumeQueue.getFailedCount(),
+      resumeQueue.getDelayedCount(),
+    ]);
+    res.json({ success: true, queue: { waiting, active, completed, failed, delayed } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-// Start server
+// ─── Error handling middleware ────────────────────────────────────────────────
+app.use((err, _req, res, _next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ success: false, error: err.message || 'Internal server error' });
+});
+
+// ─── Start server ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
-// Initialise Redis (non-blocking — app starts even if Redis is unavailable)
 initRedis().then(() => {
   app.listen(PORT, () => {
-    console.log(`🚀 CVlyze API server running on http://localhost:${PORT}`);
-    console.log(`📁 Upload folder: ${UPLOAD_FOLDER}`);
-    console.log(`🔑 Gemini API configured: ${!!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim())}`);
-    console.log(`🗄️  Redis URL: ${process.env.REDIS_URL || 'redis://localhost:6379'}`);
+    console.log(`\n🚀 CVlyze API server running on http://localhost:${PORT}`);
+    console.log(`📁 Upload folder  : ${UPLOAD_FOLDER}`);
+    console.log(`🔑 Gemini API     : ${!!(process.env.GEMINI_API_KEY?.trim()) ? '✅ configured' : '❌ missing'}`);
+    console.log(`🗄️  Redis URL      : ${process.env.REDIS_URL || 'redis://localhost:6379'}`);
+    console.log(`📬 BullMQ Queue   : resume-analysis`);
+    console.log(`\n💡 Start a worker with:  npm run worker\n`);
   });
 });
 

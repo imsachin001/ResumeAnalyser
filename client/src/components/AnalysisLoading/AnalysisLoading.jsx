@@ -24,21 +24,43 @@ const AnalysisLoading = ({ resumeFile, jobDescription, onComplete, onError }) =>
   ];
 
   useEffect(() => {
-    // Start API call immediately
+    // Guard: prevent duplicate calls if the effect somehow re-runs
+    let cancelled = false;
+
     const analyzeResume = async () => {
       try {
-        const token = await getToken();
-        const result = await ApiService.analyzeResume(resumeFile, jobDescription, token);
-        console.log('API Response:', result);
-        setAnalysisData(result.data);
-        
-        // Redirect immediately after getting data
-        setTimeout(() => {
-          if (onComplete) {
-            onComplete(result.data);
+        // Pass getToken (the function, not a pre-fetched string) so that
+        // api.js can call it fresh on every poll — Clerk tokens expire in ~60 s.
+        const handleProgress = ({ progress: serverProgress }) => {
+          if (cancelled) return;
+          if (typeof serverProgress === 'number' && serverProgress > 0) {
+            setProgress(Math.max(serverProgress, 10)); // at least 10 so bar moves
           }
-        }, 2000); // Small delay to show completion animation
+        };
+
+        const result = await ApiService.analyzeResume(
+          resumeFile,
+          jobDescription,
+          getToken,      // ← function reference, not an awaited string
+          handleProgress,
+        );
+
+        if (cancelled) return; // component unmounted — discard result
+
+        console.log('API Response:', result);
+
+        const analysisPayload = result.data;
+        setAnalysisData(analysisPayload);
+        setProgress(100);
+
+        // Small delay to show completion animation before navigating
+        setTimeout(() => {
+          if (!cancelled && onComplete) {
+            onComplete(analysisPayload);
+          }
+        }, 1200);
       } catch (error) {
+        if (cancelled) return;
         console.error('Analysis error:', error);
         if (onError) {
           onError(error.message || 'Analysis failed');
@@ -48,28 +70,32 @@ const AnalysisLoading = ({ resumeFile, jobDescription, onComplete, onError }) =>
 
     analyzeResume();
 
-    // Animate checkmarks one by one
-    steps.forEach((step, index) => {
+    // Animate checkmarks one by one (purely cosmetic — independent of API)
+    const stepTimers = steps.map((step, index) =>
       setTimeout(() => {
-        setCurrentStep(index + 1);
-      }, step.delay);
-    });
+        if (!cancelled) setCurrentStep(index + 1);
+      }, step.delay)
+    );
 
-    // Animate progress bars
+    // Animate progress bar slowly up to 85% max — the real result pushes it to 100
     const progressInterval = setInterval(() => {
+      if (cancelled) return clearInterval(progressInterval);
       setProgress(prev => {
-        if (prev >= 100) {
+        if (prev >= 85) {          // cap at 85% — real completion sets it to 100
           clearInterval(progressInterval);
-          return 100;
+          return prev;
         }
-        return prev + 2;
+        return prev + 1;
       });
-    }, 100);
+    }, 400);
 
     return () => {
+      cancelled = true;
+      stepTimers.forEach(clearTimeout);
       clearInterval(progressInterval);
     };
-  }, [resumeFile, jobDescription, getToken, onComplete, onError]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // ← intentionally empty: run once per mount (one file upload = one mount)
 
   return (
     <div className="analysis-loading-page">

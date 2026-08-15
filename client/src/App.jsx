@@ -44,7 +44,8 @@ function App() {
 
   const handleError = (errorMessage) => {
     setError(errorMessage);
-    alert(`Error: ${errorMessage}`);
+    // No alert() — AnalysisLoading already navigates back to home on error.
+    // The error state is preserved so we can surface it if needed.
     navigateToHome();
   };
 
