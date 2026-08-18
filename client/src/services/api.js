@@ -68,7 +68,7 @@ class ApiService {
 
       console.log('Poll result:', data);
 
-      if (onProgress) onProgress({ status: data.status, progress: data.progress ?? 0 });
+      if (onProgress) onProgress({ status: data.status, progress: data.progress ?? 0, stage: data.stage ?? null });
 
       if (data.status === 'completed') {
         return data.data;          // full analysis result
@@ -137,6 +137,13 @@ class ApiService {
       console.log('API: Response data:', data);
 
       if (!response.ok) {
+        // Surface rate-limit errors with a helpful message
+        if (response.status === 429) {
+          const retryAfter = data.retryAfterSeconds || 60;
+          throw new Error(
+            data.error || `Too many requests. Please wait ${retryAfter} seconds and try again.`
+          );
+        }
         throw new Error(data.error || 'Analysis failed');
       }
 

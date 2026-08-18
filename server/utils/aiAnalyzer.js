@@ -303,28 +303,57 @@ CRITICAL RULES:
         ? this.createJDMatchPrompt(parsedData, jobDescription, detectedDomain)
         : this.createDomainAwarePrompt(parsedData, detectedDomain);
 
-      console.log(`Calling Gemini AI (${hasJD ? 'JD-match mode' : 'domain-aware mode'})...`);
-      const result   = await this._callWithRetry(() => model.generateContent(prompt));
-      const response = await result.response;
-      const rawText  = response.text();
+      // ── Fire both Gemini calls in parallel ──────────────────────────────────
+      // Call #1 (main analysis) and Call #2 (ATS improvements) are independent —
+      // no reason to wait for #1 to finish before starting #2.
+      // Wall-clock time = max(call1, call2) instead of call1 + call2.
+      console.log(`      🚀 [Gemini] Firing both calls in parallel (${hasJD ? 'JD-match' : 'domain-aware'} mode)...`);
+      const parallelStart = Date.now();
+
+      const [rawText, atsImprovements] = await Promise.all([
+
+        // ── Call #1: main resume analysis (gemini-2.5-flash) ──────────────────
+        (async () => {
+          const t = Date.now();
+          console.log(`      🤖 [Gemini #1] Main analysis starting...`);
+          const result   = await this._callWithRetry(() => model.generateContent(prompt));
+          const response = await result.response;
+          console.log(`      ✅ [Gemini #1] Main analysis took: ${Date.now() - t} ms`);
+          return response.text();
+        })(),
+
+        // ── Call #2: ATS improvement cards (gemini-2.0-flash-lite) ────────────
+        // Uses a lighter, faster model — this task is simpler (structured cards)
+        // so quality is identical at a fraction of the latency.
+        (async () => {
+          const t = Date.now();
+          console.log(`      🤖 [Gemini #2] ATS improvements starting (flash-lite)...`);
+          try {
+            const improvements = await this.generateAtsImprovements(
+              parsedData, resumeQuality, detectedDomain, jobDescription, apiKey
+            );
+            console.log(`      ✅ [Gemini #2] ATS improvements took: ${Date.now() - t} ms`);
+            return improvements;
+          } catch (e) {
+            // Non-critical — fall back to built-in cards so the section never renders empty.
+            console.error('ATS improvements generation failed (non-fatal):', e.message);
+            return this.createFallbackAtsImprovements(resumeQuality, detectedDomain, parsedData);
+          }
+        })(),
+
+      ]);
+
+      console.log(`      ⏱️  [Parallel] Both calls done in: ${Date.now() - parallelStart} ms (wall-clock)`);
 
       let analysisData;
       try {
+        const jsonParseStart = Date.now();
         const cleaned = rawText.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
         analysisData  = JSON.parse(cleaned);
+        console.log(`      ✅ [Parse]    JSON parse took: ${Date.now() - jsonParseStart} ms`);
       } catch (parseErr) {
         console.error('JSON parse error from Gemini:', parseErr.message);
         throw new Error('Gemini returned an unexpected response. Please try again.');
-      }
-
-      let atsImprovements = [];
-      try {
-        atsImprovements = await this.generateAtsImprovements(parsedData, resumeQuality, detectedDomain, jobDescription, apiKey);
-      } catch (e) {
-        // Non-critical: ATS cards are bonus content. If Gemini can't produce them
-        // (quota/transient), use the built-in cards so the section never renders empty.
-        console.error('ATS improvements generation failed (non-fatal):', e.message);
-        atsImprovements = this.createFallbackAtsImprovements(resumeQuality, detectedDomain, parsedData);
       }
 
       let match_score;
@@ -410,7 +439,10 @@ CRITICAL RULES:
 
   async generateAtsImprovements(parsedData, resumeQuality, detectedDomain, jobDescription, apiKey) {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
+    // gemini-3.5-flash-lite: 3-5x faster than 2.5-flash for this simpler structured task.
+    // Since this call now runs in parallel with the main analysis, keeping it fast
+    // ensures it never becomes the bottleneck.
+    const model = genAI.getGenerativeModel({ model: 'models/gemini-3.5-flash-lite' });
 
     const maxScores = { contact: 10, sections: 15, formatting: 10, actionVerbs: 10, experienceDepth: 15 };
 

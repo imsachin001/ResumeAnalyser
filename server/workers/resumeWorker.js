@@ -123,20 +123,25 @@ const processResumeJob = async (job) => {
   console.log(`   File : ${filePath}`);
   console.log(`   Type : ${fileType}`);
 
-  const startTime = Date.now();
+  const start = Date.now();
 
   // ── 1. Mark as processing in MongoDB ────────────────────────────────────────
+  const mongoInitStart = Date.now();
+  await job.updateProgress({ pct: 5, stage: 'connecting' });
   await connectMongo();
   await AnalysisResult.findOneAndUpdate(
     { jobId: job.id },
     { status: 'processing' },
     { upsert: true, new: true }
   );
+  console.log(`   ⏱️  Mongo init/mark-processing: ${Date.now() - mongoInitStart} ms`);
 
   // ── 2. Parse PDF / DOCX ─────────────────────────────────────────────────────
-  await job.updateProgress(10);
-  console.log(`   ⚙️  Parsing resume…`);
+  await job.updateProgress({ pct: 15, stage: 'parsing' });
+  console.log(`\n   ⚙️  Parsing resume…`);
+  const parseStart = Date.now();
   const parsedData = await resumeParser.parseResume(filePath, fileType);
+  console.log(`   ✅  Parsing took: ${Date.now() - parseStart} ms`);
 
   const validation = validateResumeContent(parsedData);
   if (!validation.isValid) {
@@ -145,8 +150,9 @@ const processResumeJob = async (job) => {
   }
 
   // ── 3. Gemini AI analysis ────────────────────────────────────────────────────
-  await job.updateProgress(30);
-  console.log(`   🤖  Running Gemini analysis…`);
+  await job.updateProgress({ pct: 30, stage: 'analyzing' });
+  console.log(`\n   🤖  Running Gemini analysis…`);
+  const geminiStart = Date.now();
 
   let analysisResult;
   const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -172,6 +178,7 @@ const processResumeJob = async (job) => {
       },
     };
   }
+  console.log(`   ✅  Gemini (total) took: ${Date.now() - geminiStart} ms`);
 
   // Ensure resume name / title is always present
   const fallbackTitle = resumeTitle || 'Untitled Resume';
@@ -180,11 +187,11 @@ const processResumeJob = async (job) => {
   if (!analysisResult.parsed_data.name)          analysisResult.parsed_data.name         = extractedName;
   analysisResult.parsed_data.resume_title        = fallbackTitle;
 
-  await job.updateProgress(80);
-
   // ── 4. Store result in MongoDB ───────────────────────────────────────────────
-  console.log(`   💾  Saving to MongoDB…`);
-  const processingMs = Date.now() - startTime;
+  await job.updateProgress({ pct: 85, stage: 'saving' });
+  console.log(`\n   💾  Saving to MongoDB…`);
+  const mongoSaveStart = Date.now();
+  const processingMs = Date.now() - start;
 
   await AnalysisResult.findOneAndUpdate(
     { jobId: job.id },
@@ -199,17 +206,22 @@ const processResumeJob = async (job) => {
     },
     { upsert: true, new: true }
   );
-  
+  console.log(`   ✅  MongoDB save took: ${Date.now() - mongoSaveStart} ms`);
 
   // ── 5. Write to Redis cache ──────────────────────────────────────────────────
-  console.log(`   🔴  Caching result in Redis…`);
+  await job.updateProgress({ pct: 95, stage: 'caching' });
+  console.log(`\n   🔴  Caching result in Redis…`);
+  const redisStart = Date.now();
   await setCachedResult(cacheKey, analysisResult);
+  console.log(`   ✅  Redis cache took: ${Date.now() - redisStart} ms`);
 
   // ── 6. Cleanup uploaded file ─────────────────────────────────────────────────
   await deleteFile(filePath);
-  await job.updateProgress(100);
+  await job.updateProgress({ pct: 100, stage: 'completed' });
 
-  console.log(`   ✅  Job ${job.id} completed in ${processingMs} ms\n`);
+  console.log(`\n   ─────────────────────────────────────`);
+  console.log(`   ⏱️  TOTAL job time: ${Date.now() - start} ms`);
+  console.log(`   ─────────────────────────────────────\n`);
 
   // Return the result so BullMQ stores it as job.returnvalue
   return analysisResult;

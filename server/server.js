@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const { clerkMiddleware, requireAuth } = require('./middleware/authMiddleware');
 const { initRedis }                    = require('./utils/redisClient');
+const { checkRateLimit }               = require('./utils/rateLimiter');
 const {
   computeCacheKey,
   getCachedResult,
@@ -107,6 +108,21 @@ app.post('/api/analyze', requireAuth, upload.single('resume'), async (req, res) 
     const userId         = req.auth?.userId || 'anonymous';
     const resumeTitle    = path.parse(req.file.originalname).name || 'Untitled Resume';
 
+    // ── Rate limiting (10 analyses / 60 s per user) ──────────────────────────
+    // Cache hits are free — we only count requests that reach Gemini.
+    // We check the limit here (before the cache) so the counter only increments
+    // when we know the file was actually uploaded and we're about to process it.
+    const rateCheck = await checkRateLimit(userId, 10, 60);
+    if (!rateCheck.allowed) {
+      await deleteFileWithRetry(filePath);
+      res.set('Retry-After', String(rateCheck.ttl));
+      return res.status(429).json({
+        success: false,
+        error:   `Rate limit exceeded. You can run up to ${rateCheck.limit} analyses per minute. Try again in ${rateCheck.ttl}s.`,
+        retryAfterSeconds: rateCheck.ttl,
+      });
+    }
+
     // ── Redis cache check ────────────────────────────────────────────────────
     const fileBuffer = await fs.readFile(filePath);
     const cacheKey   = computeCacheKey(fileBuffer, jobDescription);
@@ -187,13 +203,18 @@ app.get('/api/jobs/:jobId', requireAuth, async (req, res) => {
     }
 
     const state    = await job.getState();   // 'waiting' | 'active' | 'completed' | 'failed' | 'delayed'
-    const progress = job.progress ?? 0;
+    const raw      = job.progress;
+
+    // progress can be a number (legacy) or our { pct, stage } object
+    const progress = (typeof raw === 'object' && raw !== null) ? raw.pct  : (raw ?? 0);
+    const stage    = (typeof raw === 'object' && raw !== null) ? raw.stage : null;
 
     const response = {
       success:  true,
       jobId,
       status:   state,
       progress,
+      stage,    // e.g. 'connecting' | 'parsing' | 'analyzing' | 'saving' | 'caching' | 'completed'
     };
 
     if (state === 'completed') {

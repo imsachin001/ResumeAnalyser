@@ -3,99 +3,98 @@ import { useAuth } from '@clerk/clerk-react';
 import './AnalysisLoading.css';
 import ApiService from '../../services/api';
 
+// Map server stage keys → which step index becomes "completed"
+// Steps are 0-indexed; completing step N marks steps 0..N as done.
+const STAGE_TO_STEP = {
+  connecting: 0,   // queued / DB init     → step 0 complete
+  parsing:    1,   // parsing resume       → step 1 complete
+  analyzing:  2,   // Gemini running       → step 2 complete
+  saving:     3,   // saving to MongoDB    → step 3 complete
+  caching:    3,   // caching              → step 3 complete
+  completed:  4,   // all done             → all steps complete
+};
+
 const AnalysisLoading = ({ resumeFile, jobDescription, onComplete, onError }) => {
   const { getToken } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
-  const [progress, setProgress] = useState(0);
-  const [analysisData, setAnalysisData] = useState(null);
+  const [progress, setProgress]       = useState(0);
 
   const steps = [
-    { id: 1, text: 'Parsing your resume', delay: 1000 },
-    { id: 2, text: 'Analyzing your experience', delay: 2500 },
-    { id: 3, text: 'Extracting your skills', delay: 4000 },
-    { id: 4, text: 'Generating recommendations', delay: 5500 }
+    { id: 1, text: 'Queuing your resume'       },
+    { id: 2, text: 'Parsing resume'            },
+    { id: 3, text: 'Analyzing with AI'         },
+    { id: 4, text: 'Saving result'             },
   ];
 
   const categories = [
-    { name: 'CONTENT', progress: 0 },
-    { name: 'SECTION', progress: 0 },
-    { name: 'ATS ESSENTIALS', progress: 0 },
-    { name: 'TAILORING', progress: 0 }
+    { name: 'CONTENT'       },
+    { name: 'SECTION'       },
+    { name: 'ATS ESSENTIALS'},
+    { name: 'TAILORING'     },
   ];
 
   useEffect(() => {
-    // Guard: prevent duplicate calls if the effect somehow re-runs
     let cancelled = false;
 
     const analyzeResume = async () => {
       try {
-        // Pass getToken (the function, not a pre-fetched string) so that
-        // api.js can call it fresh on every poll — Clerk tokens expire in ~60 s.
-        const handleProgress = ({ progress: serverProgress }) => {
+        const handleProgress = ({ progress: serverPct, stage }) => {
           if (cancelled) return;
-          if (typeof serverProgress === 'number' && serverProgress > 0) {
-            setProgress(Math.max(serverProgress, 10)); // at least 10 so bar moves
+
+          // Drive the progress bar from the real server percentage
+          if (typeof serverPct === 'number' && serverPct > 0) {
+            setProgress(prev => Math.max(prev, serverPct));
+          }
+
+          // Advance the step checklist based on the stage key
+          if (stage && STAGE_TO_STEP[stage] !== undefined) {
+            setCurrentStep(prev => Math.max(prev, STAGE_TO_STEP[stage]));
           }
         };
 
         const result = await ApiService.analyzeResume(
           resumeFile,
           jobDescription,
-          getToken,      // ← function reference, not an awaited string
+          getToken,
           handleProgress,
         );
 
-        if (cancelled) return; // component unmounted — discard result
+        if (cancelled) return;
 
         console.log('API Response:', result);
 
-        const analysisPayload = result.data;
-        setAnalysisData(analysisPayload);
+        setCurrentStep(steps.length);   // all steps done
         setProgress(100);
 
-        // Small delay to show completion animation before navigating
         setTimeout(() => {
-          if (!cancelled && onComplete) {
-            onComplete(analysisPayload);
-          }
+          if (!cancelled && onComplete) onComplete(result.data);
         }, 1200);
+
       } catch (error) {
         if (cancelled) return;
         console.error('Analysis error:', error);
-        if (onError) {
-          onError(error.message || 'Analysis failed');
-        }
+        if (onError) onError(error.message || 'Analysis failed');
       }
     };
 
     analyzeResume();
 
-    // Animate checkmarks one by one (purely cosmetic — independent of API)
-    const stepTimers = steps.map((step, index) =>
-      setTimeout(() => {
-        if (!cancelled) setCurrentStep(index + 1);
-      }, step.delay)
-    );
-
-    // Animate progress bar slowly up to 85% max — the real result pushes it to 100
+    // Slow-fill the bar during the long 'analyzing' step so it never looks stuck.
+    // The real server pct will always win via Math.max above once a poll arrives.
     const progressInterval = setInterval(() => {
       if (cancelled) return clearInterval(progressInterval);
       setProgress(prev => {
-        if (prev >= 85) {          // cap at 85% — real completion sets it to 100
-          clearInterval(progressInterval);
-          return prev;
-        }
-        return prev + 1;
+        if (prev >= 80) { clearInterval(progressInterval); return prev; }
+        return prev + 0.5;
       });
-    }, 400);
+    }, 600);
 
     return () => {
       cancelled = true;
-      stepTimers.forEach(clearTimeout);
       clearInterval(progressInterval);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // ← intentionally empty: run once per mount (one file upload = one mount)
+  }, []);
 
   return (
     <div className="analysis-loading-page">
