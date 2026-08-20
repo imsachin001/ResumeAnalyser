@@ -17,6 +17,7 @@ const {
 } = require('./utils/cacheService');
 const { resumeQueue } = require('./utils/queue');
 const { Job } = require('bullmq');
+const metrics  = require('./utils/metrics');
 
 const app = express();
 
@@ -25,6 +26,15 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(clerkMiddleware({ publishableKey: process.env.CLERK_PUBLISHABLE_KEY }));
+
+// ── API latency middleware (records time-to-response for /api/analyze) ────────
+app.use((req, res, next) => {
+  if (req.method === 'POST' && req.path === '/api/analyze') {
+    const start = Date.now();
+    res.on('finish', () => metrics.record('api_latency', Date.now() - start));
+  }
+  next();
+});
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const UPLOAD_FOLDER      = 'uploads';
@@ -294,6 +304,48 @@ app.get('/api/queue/stats', async (_req, res) => {
       resumeQueue.getDelayedCount(),
     ]);
     res.json({ success: true, queue: { waiting, active, completed, failed, delayed } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── GET /api/metrics ──────────────────────────────────────────────────────────
+/**
+ * Returns all observability metrics:
+ *   - api_latency, queue_wait_ms, worker_total_ms
+ *   - gemini_total_ms, gemini_call1_ms, gemini_call2_ms
+ *   - mongo_save_ms, parse_ms
+ *   - jobs_completed, jobs_failed, jobs_retried
+ *   - cache hit rate
+ *
+ * Each latency metric includes avg, p50, p95, min, max, count.
+ */
+app.get('/api/metrics', async (_req, res) => {
+  try {
+    const summary = await metrics.getSummary();
+    const { formatSummary } = require('./utils/metrics');
+
+    // Build human-readable strings alongside the raw numbers
+    const human = {};
+    for (const [key, val] of Object.entries(summary.latencies)) {
+      human[key] = formatSummary(val);
+    }
+
+    res.json({
+      success: true,
+      metrics: summary,
+      human,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/metrics — reset all counters and latency samples to zero
+app.delete('/api/metrics', async (_req, res) => {
+  try {
+    await metrics.resetAll();
+    res.json({ success: true, message: 'All metrics reset to zero' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

@@ -1,6 +1,7 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const domainTemplates = require('./domainTemplates');
 const atsCalculator   = require('./atsCalculator');
+const metrics         = require('./metrics');
 
 class AIAnalyzer {
   constructor() {
@@ -318,7 +319,9 @@ CRITICAL RULES:
           console.log(`      🤖 [Gemini #1] Main analysis starting...`);
           const result   = await this._callWithRetry(() => model.generateContent(prompt));
           const response = await result.response;
-          console.log(`      ✅ [Gemini #1] Main analysis took: ${Date.now() - t} ms`);
+          const call1Ms  = Date.now() - t;
+          metrics.record('gemini_call1_ms', call1Ms);
+          console.log(`      ✅ [Gemini #1] Main analysis took: ${call1Ms} ms`);
           return response.text();
         })(),
 
@@ -332,7 +335,9 @@ CRITICAL RULES:
             const improvements = await this.generateAtsImprovements(
               parsedData, resumeQuality, detectedDomain, jobDescription, apiKey
             );
-            console.log(`      ✅ [Gemini #2] ATS improvements took: ${Date.now() - t} ms`);
+            const call2Ms = Date.now() - t;
+            metrics.record('gemini_call2_ms', call2Ms);
+            console.log(`      ✅ [Gemini #2] ATS improvements took: ${call2Ms} ms`);
             return improvements;
           } catch (e) {
             // Non-critical — fall back to built-in cards so the section never renders empty.
@@ -678,6 +683,7 @@ RESPONSE — ONLY valid JSON:
         lastErr = err;
         if (attempt < retries && this._isTransientGeminiError(err)) {
           console.warn(`Gemini transient error (attempt ${attempt + 1}/${retries + 1}) — retrying in ${delayMs}ms: ${err.message}`);
+          metrics.increment('jobs_retried'); // ← track every Gemini retry
           await this._sleep(delayMs);
           continue;
         }

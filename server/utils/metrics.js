@@ -1,20 +1,25 @@
-/**
+﻿/**
  * metrics.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Lightweight Redis-backed metrics collector.
+ * Lightweight Redis-backed metrics collector with in-memory fallback.
  *
- * All public functions are fire-and-forget and swallow errors internally —
+ * Tracks all 8 observability metrics:
+ *   1. api_latency       - POST /api/analyze end-to-end HTTP response time
+ *   2. queue_wait_ms     - time a job sits in BullMQ before worker picks it
+ *   3. worker_total_ms   - total time inside processResumeJob()
+ *   4. gemini_total_ms   - wall-clock for both parallel Gemini calls
+ *   5. gemini_call1_ms   - main analysis call (gemini-2.5-flash)
+ *   6. gemini_call2_ms   - ATS improvements call (gemini-3.5-flash-lite)
+ *   7. mongo_save_ms     - MongoDB findOneAndUpdate write latency
+ *   8. parse_ms          - PDF/DOCX resume parsing time
+ *
+ * Counters:
+ *   - jobs_completed
+ *   - jobs_failed
+ *   - jobs_retried      (incremented each time _callWithRetry retries)
+ *
+ * All public functions are fire-and-forget and swallow errors internally -
  * they must NEVER throw or cause callers to fail.
- *
- * Storage strategy:
- *   Latencies → LPUSH + LTRIM   (rolling window of last SAMPLE_WINDOW samples)
- *   Counters  → INCR
- *
- * Usage:
- *   const metrics = require('./metrics');
- *   metrics.record('gemini_call1_ms', 23400);   // fire-and-forget
- *   metrics.increment('jobs_completed');          // fire-and-forget
- *   const summary = await metrics.getSummary();  // async, safe to await
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -22,7 +27,6 @@ const { getClient, isAvailable } = require('./redisClient');
 
 const SAMPLE_WINDOW = 200; // keep last N latency samples per metric
 
-// All latency metric names we track
 const LATENCY_METRICS = [
   'api_latency',
   'queue_wait_ms',
@@ -34,32 +38,27 @@ const LATENCY_METRICS = [
   'parse_ms',
 ];
 
-// All counter names we track
 const COUNTER_METRICS = [
   'jobs_completed',
   'jobs_failed',
   'jobs_retried',
 ];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// In-memory fallback (used when Redis is unavailable, e.g. in worker process)
+const _mem = {
+  latencies: Object.fromEntries(LATENCY_METRICS.map(m => [m, []])),
+  counters:  Object.fromEntries(COUNTER_METRICS.map(c => [c, 0])),
+};
 
-const latencyKey  = (name) => `metrics:${name}`;
-const counterKey  = (name) => `metrics:${name}`;
+const latencyKey = (name) => `metrics:${name}`;
+const counterKey = (name) => `metrics:${name}`;
 
-/**
- * Compute percentile from a sorted numeric array.
- * @param {number[]} sorted - ascending sorted array
- * @param {number}   pct    - 0–100
- */
 const percentile = (sorted, pct) => {
   if (!sorted.length) return 0;
   const idx = Math.ceil((pct / 100) * sorted.length) - 1;
   return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
 };
 
-/**
- * Summarise a raw array of string values read from Redis LRANGE.
- */
 const summarise = (rawValues) => {
   if (!rawValues || !rawValues.length) {
     return { avg: 0, p50: 0, p95: 0, min: 0, max: 0, count: 0 };
@@ -82,12 +81,17 @@ const summarise = (rawValues) => {
 
 /**
  * Record a latency sample (milliseconds).
- * Fire-and-forget — never throws.
- *
- * @param {string} metricName - one of LATENCY_METRICS
- * @param {number} valueMs
+ * Fire-and-forget - never throws.
  */
 const record = (metricName, valueMs) => {
+  // In-memory fallback (always written)
+  if (_mem.latencies[metricName] !== undefined) {
+    _mem.latencies[metricName].push(valueMs);
+    if (_mem.latencies[metricName].length > SAMPLE_WINDOW) {
+      _mem.latencies[metricName].shift();
+    }
+  }
+  // Redis (best-effort)
   if (!isAvailable()) return;
   const client = getClient();
   const key    = latencyKey(metricName);
@@ -96,94 +100,117 @@ const record = (metricName, valueMs) => {
     .lpush(key, valueMs)
     .ltrim(key, 0, SAMPLE_WINDOW - 1)
     .exec()
-    .catch(() => {}); // swallow silently
+    .catch(() => {});
 };
 
 /**
  * Increment a counter by 1.
- * Fire-and-forget — never throws.
- *
- * @param {string} counterName - one of COUNTER_METRICS
+ * Fire-and-forget - never throws.
  */
 const increment = (counterName) => {
+  // In-memory fallback (always written)
+  if (_mem.counters[counterName] !== undefined) {
+    _mem.counters[counterName]++;
+  }
+  // Redis (best-effort)
   if (!isAvailable()) return;
   getClient()
     .incr(counterKey(counterName))
-    .catch(() => {}); // swallow silently
+    .catch(() => {});
 };
 
 /**
- * Read all metrics from Redis and return a formatted summary.
- * Safe to await — errors return an empty/zero summary, not a throw.
- *
- * @returns {Promise<Object>}
+ * Read all metrics from Redis (or in-memory fallback) and return a summary.
+ * Safe to await - errors return zero summary, not a throw.
  */
 const getSummary = async () => {
   const empty = () => ({ avg: 0, p50: 0, p95: 0, min: 0, max: 0, count: 0 });
 
-  if (!isAvailable()) {
-    return {
-      latencies:   Object.fromEntries(LATENCY_METRICS.map((m) => [m, empty()])),
-      counters:    Object.fromEntries(COUNTER_METRICS.map((c) => [c, 0])),
-      cache:       { hits: 0, misses: 0, hitRate: '0.00' },
-      collectedAt: new Date().toISOString(),
-      note:        'Redis unavailable — no metrics recorded',
-    };
+  if (isAvailable()) {
+    try {
+      const client   = getClient();
+      const pipeline = client.pipeline();
+
+      LATENCY_METRICS.forEach((m) => pipeline.lrange(latencyKey(m), 0, -1));
+      COUNTER_METRICS.forEach((c) => pipeline.get(counterKey(c)));
+      pipeline.get('cache:hits');
+      pipeline.get('cache:misses');
+
+      const results = await pipeline.exec();
+
+      const latencies = {};
+      LATENCY_METRICS.forEach((m, i) => {
+        const [, raw] = results[i] || [];
+        latencies[m]  = summarise(Array.isArray(raw) ? raw : []);
+      });
+
+      const counters = {};
+      COUNTER_METRICS.forEach((c, i) => {
+        const [, raw] = results[LATENCY_METRICS.length + i] || [];
+        counters[c]   = parseInt(raw || '0', 10);
+      });
+
+      const cacheHitsIdx   = LATENCY_METRICS.length + COUNTER_METRICS.length;
+      const cacheMissesIdx = cacheHitsIdx + 1;
+      const cacheHits      = parseInt((results[cacheHitsIdx]   || [])[1] || '0', 10);
+      const cacheMisses    = parseInt((results[cacheMissesIdx] || [])[1] || '0', 10);
+      const cacheTotal     = cacheHits + cacheMisses;
+      const hitRate        = cacheTotal > 0 ? ((cacheHits / cacheTotal) * 100).toFixed(2) : '0.00';
+
+      return {
+        latencies,
+        counters,
+        cache: { hits: cacheHits, misses: cacheMisses, hitRate },
+        collectedAt: new Date().toISOString(),
+        source: 'redis',
+      };
+    } catch (err) {
+      console.warn('metrics.getSummary Redis error, falling back to memory:', err.message);
+    }
   }
 
+  // In-memory fallback
+  const latencies = {};
+  LATENCY_METRICS.forEach((m) => {
+    latencies[m] = summarise(_mem.latencies[m] || []);
+  });
+
+  return {
+    latencies,
+    counters: { ..._mem.counters },
+    cache: { hits: 0, misses: 0, hitRate: '0.00' },
+    collectedAt: new Date().toISOString(),
+    source: 'memory',
+    note: 'Redis unavailable - showing in-process samples only',
+  };
+};
+
+/**
+ * Reset all metrics to zero (both Redis and in-memory).
+ */
+const resetAll = async () => {
+  LATENCY_METRICS.forEach(m => { _mem.latencies[m] = []; });
+  COUNTER_METRICS.forEach(c => { _mem.counters[c]  = 0;  });
+
+  if (!isAvailable()) return;
   try {
     const client   = getClient();
     const pipeline = client.pipeline();
-
-    // Fetch all latency windows
-    LATENCY_METRICS.forEach((m) => pipeline.lrange(latencyKey(m), 0, -1));
-
-    // Fetch all counters
-    COUNTER_METRICS.forEach((c) => pipeline.get(counterKey(c)));
-
-    // Fetch cache counters (written by cacheService.js)
-    pipeline.get('cache:hits');
-    pipeline.get('cache:misses');
-
-    const results = await pipeline.exec(); // [[err, val], ...]
-
-    // Unpack latency results (first LATENCY_METRICS.length entries)
-    const latencies = {};
-    LATENCY_METRICS.forEach((m, i) => {
-      const [, raw] = results[i] || [];
-      latencies[m]  = summarise(Array.isArray(raw) ? raw : []);
-    });
-
-    // Unpack counter results
-    const counters = {};
-    COUNTER_METRICS.forEach((c, i) => {
-      const [, raw] = results[LATENCY_METRICS.length + i] || [];
-      counters[c]   = parseInt(raw || '0', 10);
-    });
-
-    // Unpack cache counters
-    const cacheHitsIdx   = LATENCY_METRICS.length + COUNTER_METRICS.length;
-    const cacheMissesIdx = cacheHitsIdx + 1;
-    const cacheHits      = parseInt((results[cacheHitsIdx]   || [])[1] || '0', 10);
-    const cacheMisses    = parseInt((results[cacheMissesIdx] || [])[1] || '0', 10);
-    const cacheTotal     = cacheHits + cacheMisses;
-    const hitRate        = cacheTotal > 0 ? ((cacheHits / cacheTotal) * 100).toFixed(2) : '0.00';
-
-    return {
-      latencies,
-      counters,
-      cache: { hits: cacheHits, misses: cacheMisses, hitRate },
-      collectedAt: new Date().toISOString(),
-    };
+    LATENCY_METRICS.forEach(m => pipeline.del(latencyKey(m)));
+    COUNTER_METRICS.forEach(c => pipeline.del(counterKey(c)));
+    await pipeline.exec();
+    console.log('Metrics reset to zero');
   } catch (err) {
-    return {
-      latencies:   Object.fromEntries(LATENCY_METRICS.map((m) => [m, empty()])),
-      counters:    Object.fromEntries(COUNTER_METRICS.map((c) => [c, 0])),
-      cache:       { hits: 0, misses: 0, hitRate: '0.00' },
-      collectedAt: new Date().toISOString(),
-      error:       err.message,
-    };
+    console.warn('metrics.resetAll error:', err.message);
   }
 };
 
-module.exports = { record, increment, getSummary };
+/**
+ * Format a latency summary as a human-readable string.
+ */
+const formatSummary = (s, unit = 'ms') => {
+  if (!s || s.count === 0) return 'no data';
+  return `avg=${s.avg}${unit}  p50=${s.p50}${unit}  p95=${s.p95}${unit}  min=${s.min}${unit}  max=${s.max}${unit}  n=${s.count}`;
+};
+
+module.exports = { record, increment, getSummary, resetAll, formatSummary };

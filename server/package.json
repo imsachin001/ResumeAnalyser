@@ -10,7 +10,8 @@
     "worker:dev": "nodemon workers/resumeWorker.js",
     "test:concurrency": "node test/test-concurrency.js",
     "test:cache": "node test/test-cache.js",
-    "test:retry": "node test/test-retry.js"
+    "test:retry": "node test/test-retry.js",
+    "benchmark": "node test/benchmark.js"
   },
   "keywords": [
     "resume",

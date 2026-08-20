@@ -39,6 +39,7 @@ const resumeParser = require('../utils/resumeParserEnhanced');
 const aiAnalyzer   = require('../utils/aiAnalyzer');
 const { setCachedResult } = require('../utils/cacheService');
 const { QUEUE_NAME, redisConnection } = require('../utils/queue');
+const metrics      = require('../utils/metrics');
 
 // ─── Pre-flight Redis check ───────────────────────────────────────────────────
 const checkRedisConnection = async () => {
@@ -115,7 +116,8 @@ const validateResumeContent = (parsedData) => {
   return { isValid: hasEnoughText && signalCount >= 2 };
 };
 
-// ─── Core job processor ───────────────────────────────────────────────────────
+
+﻿// ─── Core job processor ───────────────────────────────────────────────────────
 const processResumeJob = async (job) => {
   const { filePath, fileType, jobDescription, userId, cacheKey, resumeTitle } = job.data;
 
@@ -123,7 +125,15 @@ const processResumeJob = async (job) => {
   console.log(`   File : ${filePath}`);
   console.log(`   Type : ${fileType}`);
 
-  const start = Date.now();
+  const workerStart = Date.now();
+
+  // ── Metric: queue_wait_ms (enqueue → worker pickup time) ────────────────────
+  // job.timestamp is the ms-epoch when the job was added to the queue.
+  if (job.timestamp) {
+    const queueWaitMs = workerStart - job.timestamp;
+    metrics.record('queue_wait_ms', queueWaitMs);
+    console.log(`   📊  Queue wait : ${queueWaitMs} ms`);
+  }
 
   // ── 1. Mark as processing in MongoDB ────────────────────────────────────────
   const mongoInitStart = Date.now();
@@ -141,7 +151,9 @@ const processResumeJob = async (job) => {
   console.log(`\n   ⚙️  Parsing resume…`);
   const parseStart = Date.now();
   const parsedData = await resumeParser.parseResume(filePath, fileType);
-  console.log(`   ✅  Parsing took: ${Date.now() - parseStart} ms`);
+  const parseMs    = Date.now() - parseStart;
+  metrics.record('parse_ms', parseMs);
+  console.log(`   ✅  Parsing took: ${parseMs} ms`);
 
   const validation = validateResumeContent(parsedData);
   if (!validation.isValid) {
@@ -172,26 +184,28 @@ const processResumeJob = async (job) => {
         'Include quantifiable achievements',
       ],
       parsed_data: {
-        name:       parsedData.name,
-        contact:    parsedData.contact,
+        name:        parsedData.name,
+        contact:     parsedData.contact,
         skills_list: parsedData.skills_list || [],
       },
     };
   }
-  console.log(`   ✅  Gemini (total) took: ${Date.now() - geminiStart} ms`);
+  const geminiTotalMs = Date.now() - geminiStart;
+  metrics.record('gemini_total_ms', geminiTotalMs);
+  console.log(`   ✅  Gemini (total) took: ${geminiTotalMs} ms`);
 
   // Ensure resume name / title is always present
   const fallbackTitle = resumeTitle || 'Untitled Resume';
   const extractedName = parsedData.contact?.name || parsedData.name || fallbackTitle;
-  analysisResult.parsed_data                    = analysisResult.parsed_data || {};
-  if (!analysisResult.parsed_data.name)          analysisResult.parsed_data.name         = extractedName;
-  analysisResult.parsed_data.resume_title        = fallbackTitle;
+  analysisResult.parsed_data                 = analysisResult.parsed_data || {};
+  if (!analysisResult.parsed_data.name)       analysisResult.parsed_data.name        = extractedName;
+  analysisResult.parsed_data.resume_title     = fallbackTitle;
 
   // ── 4. Store result in MongoDB ───────────────────────────────────────────────
   await job.updateProgress({ pct: 85, stage: 'saving' });
   console.log(`\n   💾  Saving to MongoDB…`);
   const mongoSaveStart = Date.now();
-  const processingMs = Date.now() - start;
+  const processingMs   = Date.now() - workerStart;
 
   await AnalysisResult.findOneAndUpdate(
     { jobId: job.id },
@@ -206,7 +220,9 @@ const processResumeJob = async (job) => {
     },
     { upsert: true, new: true }
   );
-  console.log(`   ✅  MongoDB save took: ${Date.now() - mongoSaveStart} ms`);
+  const mongoSaveMs = Date.now() - mongoSaveStart;
+  metrics.record('mongo_save_ms', mongoSaveMs);
+  console.log(`   ✅  MongoDB save took: ${mongoSaveMs} ms`);
 
   // ── 5. Write to Redis cache ──────────────────────────────────────────────────
   await job.updateProgress({ pct: 95, stage: 'caching' });
@@ -215,12 +231,16 @@ const processResumeJob = async (job) => {
   await setCachedResult(cacheKey, analysisResult);
   console.log(`   ✅  Redis cache took: ${Date.now() - redisStart} ms`);
 
-  // ── 6. Cleanup uploaded file ─────────────────────────────────────────────────
+  // ── 6. Cleanup & final metrics ───────────────────────────────────────────────
   await deleteFile(filePath);
   await job.updateProgress({ pct: 100, stage: 'completed' });
 
+  const workerTotalMs = Date.now() - workerStart;
+  metrics.record('worker_total_ms', workerTotalMs);
+  metrics.increment('jobs_completed');
+
   console.log(`\n   ─────────────────────────────────────`);
-  console.log(`   ⏱️  TOTAL job time: ${Date.now() - start} ms`);
+  console.log(`   ⏱️  TOTAL job time: ${workerTotalMs} ms`);
   console.log(`   ─────────────────────────────────────\n`);
 
   // Return the result so BullMQ stores it as job.returnvalue
@@ -248,6 +268,7 @@ worker.on('completed', (job) => {
 
 worker.on('failed', async (job, err) => {
   console.error(`❌  [Worker] Job ${job?.id} failed: ${err.message}`);
+  metrics.increment('jobs_failed');
 
   // Mark as failed in MongoDB so the API can report the error
   try {
