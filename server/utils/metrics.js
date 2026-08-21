@@ -1,4 +1,4 @@
-﻿/**
+/**
  * metrics.js
  * ─────────────────────────────────────────────────────────────────────────────
  * Lightweight Redis-backed metrics collector with in-memory fallback.
@@ -8,7 +8,7 @@
  *   2. queue_wait_ms     - time a job sits in BullMQ before worker picks it
  *   3. worker_total_ms   - total time inside processResumeJob()
  *   4. gemini_total_ms   - wall-clock for both parallel Gemini calls
- *   5. gemini_call1_ms   - main analysis call (gemini-2.5-flash)
+ *   5. gemini_call1_ms   - main analysis call (gemini-2.5-flash-lite)
  *   6. gemini_call2_ms   - ATS improvements call (gemini-3.5-flash-lite)
  *   7. mongo_save_ms     - MongoDB findOneAndUpdate write latency
  *   8. parse_ms          - PDF/DOCX resume parsing time
@@ -42,6 +42,7 @@ const COUNTER_METRICS = [
   'jobs_completed',
   'jobs_failed',
   'jobs_retried',
+  'jobs_fallback',   // analyses that used the built-in fallback (no Gemini call)
 ];
 
 // In-memory fallback (used when Redis is unavailable, e.g. in worker process)

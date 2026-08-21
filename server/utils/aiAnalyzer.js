@@ -298,7 +298,7 @@ CRITICAL RULES:
 
     try {
       const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash' });
+      const model = genAI.getGenerativeModel({ model: 'models/gemini-2.5-flash-lite' });
 
       const prompt = hasJD
         ? this.createJDMatchPrompt(parsedData, jobDescription, detectedDomain)
@@ -313,7 +313,7 @@ CRITICAL RULES:
 
       const [rawText, atsImprovements] = await Promise.all([
 
-        // ── Call #1: main resume analysis (gemini-2.5-flash) ──────────────────
+        // ── Call #1: main resume analysis (gemini-2.5-flash-lite) ─────────────
         (async () => {
           const t = Date.now();
           console.log(`      🤖 [Gemini #1] Main analysis starting...`);
@@ -325,7 +325,7 @@ CRITICAL RULES:
           return response.text();
         })(),
 
-        // ── Call #2: ATS improvement cards (gemini-2.0-flash-lite) ────────────
+        // ── Call #2: ATS improvement cards (gemini-3.5-flash-lite) ────────────
         // Uses a lighter, faster model — this task is simpler (structured cards)
         // so quality is identical at a fraction of the latency.
         (async () => {
@@ -444,7 +444,7 @@ CRITICAL RULES:
 
   async generateAtsImprovements(parsedData, resumeQuality, detectedDomain, jobDescription, apiKey) {
     const genAI = new GoogleGenerativeAI(apiKey);
-    // gemini-3.5-flash-lite: 3-5x faster than 2.5-flash for this simpler structured task.
+    // gemini-3.5-flash-lite: fast and cheap for this simpler structured task.
     // Since this call now runs in parallel with the main analysis, keeping it fast
     // ensures it never becomes the bottleneck.
     const model = genAI.getGenerativeModel({ model: 'models/gemini-3.5-flash-lite' });
@@ -674,7 +674,8 @@ RESPONSE — ONLY valid JSON:
   // Run an async Gemini call with one retry on transient (rate-limit / overload)
   // errors. Hard failures (or quota fully exhausted) fall through to the caller,
   // which serves the built-in analyzer.
-  async _callWithRetry(fn, retries = 1, delayMs = 1200) {
+  // delayMs defaults to 15 000 ms — Gemini 429 responses ask for ~13 s wait.
+  async _callWithRetry(fn, retries = 1, delayMs = 15_000) {
     let lastErr;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
@@ -682,9 +683,12 @@ RESPONSE — ONLY valid JSON:
       } catch (err) {
         lastErr = err;
         if (attempt < retries && this._isTransientGeminiError(err)) {
-          console.warn(`Gemini transient error (attempt ${attempt + 1}/${retries + 1}) — retrying in ${delayMs}ms: ${err.message}`);
+          // Try to honour the retryDelay hint embedded in the 429 body (e.g. "13s").
+          const retryMatch = (err.message || '').match(/retry(?:Delay|After)["\s:]+(\d+)s/i);
+          const actualDelay = retryMatch ? (Number(retryMatch[1]) + 2) * 1000 : delayMs;
+          console.warn(`Gemini transient error (attempt ${attempt + 1}/${retries + 1}) — retrying in ${actualDelay}ms: ${err.message}`);
           metrics.increment('jobs_retried'); // ← track every Gemini retry
-          await this._sleep(delayMs);
+          await this._sleep(actualDelay);
           continue;
         }
         throw err;

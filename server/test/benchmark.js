@@ -1,4 +1,4 @@
-﻿/**
+/**
  * benchmark.js
  * ─────────────────────────────────────────────────────────────────────────────
  * Reads live metrics from Redis and prints a formatted performance report.
@@ -69,8 +69,8 @@ async function main() {
     ['Queue Wait (enqueue → worker pickup)','queue_wait_ms'],
     ['Worker Total (queue pickup → done)',  'worker_total_ms'],
     ['Gemini Total (wall-clock parallel)',  'gemini_total_ms'],
-    ['Gemini Call #1 (main, 2.5-flash)',    'gemini_call1_ms'],
-    ['Gemini Call #2 (ATS, flash-lite)',    'gemini_call2_ms'],
+    ['Gemini Call #1 (main, 2.5-flash-lite)', 'gemini_call1_ms'],
+    ['Gemini Call #2 (ATS, 3.5-flash-lite)', 'gemini_call2_ms'],
     ['MongoDB Save',                        'mongo_save_ms'],
     ['Resume Parse (PDF/DOCX)',             'parse_ms'],
   ];
@@ -82,10 +82,13 @@ async function main() {
   // ── Counters ───────────────────────────────────────────────────────────────
   console.log('\n  JOB COUNTERS');
   console.log(line());
-  const total = C.jobs_completed + C.jobs_failed;
-  console.log(pad('Jobs Completed:',  String(C.jobs_completed)));
-  console.log(pad('Jobs Failed:',     String(C.jobs_failed)));
-  console.log(pad('Gemini Retries:',  String(C.jobs_retried)));
+  const total       = C.jobs_completed + C.jobs_failed;
+  const geminiJobs  = C.jobs_completed - (C.jobs_fallback || 0);  // completed via real Gemini
+  console.log(pad('Jobs Completed:',         String(C.jobs_completed)));
+  console.log(pad('  ↳ Gemini-backed:',      String(Math.max(0, geminiJobs))));
+  console.log(pad('  ↳ Fallback (no Gemini):',String(C.jobs_fallback || 0)));
+  console.log(pad('Jobs Failed:',            String(C.jobs_failed)));
+  console.log(pad('Gemini Retries:',         String(C.jobs_retried)));
   if (total > 0) {
     console.log(pad('Success Rate:',  pct(C.jobs_completed / total)));
     console.log(pad('Failure Rate:',  pct(C.jobs_failed / total)));
@@ -123,11 +126,11 @@ async function main() {
     bullets.push(
       `Reduced Gemini processing time by ~${savedPct}% (from ~${msOrSec(serialEst)} estimated serial` +
       ` to ~${msOrSec(wallClock)} wall-clock) by parallelizing main analysis and ATS` +
-      ` improvement calls across gemini-2.5-flash and gemini-3.5-flash-lite.`
+      ` improvement calls across gemini-2.5-flash-lite and gemini-3.5-flash-lite.`
     );
     bullets.push(
-      `Gemini Call #1 (main analysis, 2.5-flash): avg ${msOrSec(g1.avg)}, p95 ${msOrSec(g1.p95)}.` +
-      ` Call #2 (ATS cards, flash-lite): avg ${msOrSec(g2.avg)}, p95 ${msOrSec(g2.p95)}.` +
+      `Gemini Call #1 (main analysis, 2.5-flash-lite): avg ${msOrSec(g1.avg)}, p95 ${msOrSec(g1.p95)}.` +
+      ` Call #2 (ATS cards, 3.5-flash-lite): avg ${msOrSec(g2.avg)}, p95 ${msOrSec(g2.p95)}.` +
       ` Total wall-clock: avg ${msOrSec(gt.avg)}.`
     );
   } else if (gt.count > 0) {
@@ -140,7 +143,7 @@ async function main() {
   if (wt.count > 0) {
     bullets.push(
       `End-to-end worker processing time (parse + AI + DB + cache): avg ${msOrSec(wt.avg)},` +
-      ` p50 ${msOrSec(wt.p50)}, p95 ${msOrSec(wt.p95)} across ${wt.count} job(s).`
+      ` p50 ${msOrSec(wt.p50)}, p95 ${msOrSec(wt.p95)} across ${wt.count} Gemini-backed job(s).`
     );
   }
 
@@ -183,11 +186,15 @@ async function main() {
   }
 
   // Reliability
-  const jobTotal = C.jobs_completed + C.jobs_failed;
+  const jobTotal   = C.jobs_completed + C.jobs_failed;
+  const fallbacks  = C.jobs_fallback || 0;
   if (jobTotal > 0) {
     const successRate = ((C.jobs_completed / jobTotal) * 100).toFixed(1);
     bullets.push(
-      `Job success rate: ${successRate}% (${C.jobs_completed}/${jobTotal} completed).` +
+      `Job success rate: ${successRate}% (${C.jobs_completed}/${jobTotal} completed,` +
+      ` ${Math.max(0, geminiJobs)} Gemini-backed` +
+      (fallbacks > 0 ? `, ${fallbacks} fallback` : '') +
+      `).` +
       (C.jobs_retried > 0 ? ` Gemini transient errors triggered ${C.jobs_retried} retry(ies) via exponential backoff.` : '')
     );
   }

@@ -168,9 +168,11 @@ const processResumeJob = async (job) => {
 
   let analysisResult;
   const geminiApiKey = process.env.GEMINI_API_KEY;
+  let usedGemini = false;
 
   if (geminiApiKey && geminiApiKey.trim()) {
     analysisResult = await aiAnalyzer.analyzeResume(parsedData, jobDescription, geminiApiKey);
+    usedGemini = true;
   } else {
     // Graceful fallback when no API key is configured
     const atsScore = aiAnalyzer.calculateAtsScore(parsedData);
@@ -189,9 +191,13 @@ const processResumeJob = async (job) => {
         skills_list: parsedData.skills_list || [],
       },
     };
+    metrics.increment('jobs_fallback');
   }
   const geminiTotalMs = Date.now() - geminiStart;
-  metrics.record('gemini_total_ms', geminiTotalMs);
+  // Only record Gemini timing for real Gemini-backed analyses
+  if (usedGemini) {
+    metrics.record('gemini_total_ms', geminiTotalMs);
+  }
   console.log(`   ✅  Gemini (total) took: ${geminiTotalMs} ms`);
 
   // Ensure resume name / title is always present
