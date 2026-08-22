@@ -12,7 +12,7 @@ function App() {
   const [resumeFile, setResumeFile] = useState(null);
   const [jobDescription, setJobDescription] = useState('');
   const [analysisResult, setAnalysisResult] = useState(null);
-  const [error, setError] = useState(null);
+  const [, setError] = useState(null);
 
   const navigateToLoading = (file, jd) => {
     setResumeFile(file);

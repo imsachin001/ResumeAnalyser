@@ -21,7 +21,7 @@ const RoleCard = ({ role, index, matchPercentage, isExpanded, onToggle, getRoleD
     } else if (roleDetailsCache[role]) {
       setRoleDetails(roleDetailsCache[role]);
     }
-  }, [isExpanded, role, matchPercentage]);
+  }, [getRoleDetails, isExpanded, matchPercentage, role, roleDetailsCache]);
 
   return (
     <>
@@ -165,7 +165,6 @@ const Analysis = ({ data, onBackToHome }) => {
   const [selectedSkillCategory, setSelectedSkillCategory] = useState('all');
   const [animatedScores, setAnimatedScores] = useState({ ats: 0, match: 0, resume: 0 });
   const [isExporting, setIsExporting] = useState(false);
-  const [shareableLink, setShareableLink] = useState('');
   const [expandedRole, setExpandedRole] = useState(null);
   const [roleDetailsCache, setRoleDetailsCache] = useState({});
   const [loadingRoleDetails, setLoadingRoleDetails] = useState({});
@@ -194,8 +193,6 @@ const Analysis = ({ data, onBackToHome }) => {
     parsed_data = {},
     detected_domain = '',
     has_jd = false,
-    experience_summary = '',
-    section_completeness = {},
     top_skills = []
   } = data || {};
 
@@ -576,11 +573,9 @@ const Analysis = ({ data, onBackToHome }) => {
       
       // Copy to clipboard
       navigator.clipboard.writeText(shareableUrl).then(() => {
-        setShareableLink(shareableUrl);
         alert('🔗 Shareable link copied to clipboard!\n\nNote: In production, this would be a shortened URL stored on a server.');
       }).catch(err => {
         console.error('Failed to copy link:', err);
-        setShareableLink(shareableUrl);
         alert('Link generated! Please copy manually:\n' + shareableUrl);
       });
     } catch (error) {
@@ -591,9 +586,6 @@ const Analysis = ({ data, onBackToHome }) => {
 
   // Early return if no data
   if (!data) {
-    // If there's an explicit server-side error flag, show the "busy" banner
-    // then send the user home. This is triggered when Gemini is unavailable.
-    const isBusy = data === null;   // null = explicit error, undefined = never loaded
     return (
       <div className="analysis-page">
         <div className="analysis-container" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
