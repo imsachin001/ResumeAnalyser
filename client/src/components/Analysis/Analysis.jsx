@@ -193,10 +193,13 @@ const Analysis = ({ data, onBackToHome }) => {
     experience_level = '',
     parsed_data = {},
     detected_domain = '',
+    has_jd = false,
     experience_summary = '',
     section_completeness = {},
     top_skills = []
   } = data || {};
+
+  const hasJD = has_jd === true;
 
 
   // Animate scores on mount
@@ -655,15 +658,15 @@ const Analysis = ({ data, onBackToHome }) => {
                     transform="rotate(-90 100 100)"
                   />
                   <text x="100" y="93"  textAnchor="middle" className="score-text-large">{animatedScores.resume}%</text>
-                  <text x="100" y="115" textAnchor="middle" className="score-text-small">Resume Quality</text>
+                        <text x="100" y="115" textAnchor="middle" className="score-text-small">ATS Resume Quality Score</text>
                 </svg>
               </div>
-              <div className="score-tooltip">Based on structure, readability, formatting and impact.</div>
+              <div className="score-tooltip">Based on ATS readiness, structure, readability, formatting and impact.</div>
             </div>
           )}
 
-          {/* Job Match */}
-          {match_score !== undefined && (
+          {/* Job Match is meaningful only when the user supplied a JD. */}
+          {hasJD && match_score !== undefined && (
             <div className="score-card">
               <div className="score-circle-container">
                 <svg className="score-circle" viewBox="0 0 200 200">
@@ -684,8 +687,8 @@ const Analysis = ({ data, onBackToHome }) => {
             </div>
           )}
 
-          {/* ATS Compatibility */}
-          {ats_score !== undefined && (
+          {/* ATS Compatibility is calculated from JD match only when a JD exists. */}
+          {hasJD && ats_score !== undefined && (
             <div className="score-card">
               <div className="score-circle-container">
                 <svg className="score-circle" viewBox="0 0 200 200">
@@ -746,7 +749,7 @@ const Analysis = ({ data, onBackToHome }) => {
           </div>
 
           {/* JD Match Breakdown */}
-          <div className="breakdown-card">
+          {hasJD && <div className="breakdown-card">
             <h3>🎯 JD Match Breakdown <span className="breakdown-total">({match_score}/100)</span></h3>
             <div className="breakdown-rows">
               {[
@@ -771,10 +774,10 @@ const Analysis = ({ data, onBackToHome }) => {
                 );
               })}
             </div>
-          </div>
+          </div>}
 
-          {/* ATS Formula */}
-          <div className="breakdown-card formula-card">
+          {/* ATS Formula applies only to JD-based reports. */}
+          {hasJD && <div className="breakdown-card formula-card">
             <h3>🧮 ATS Compatibility Score</h3>
             <div className="formula-line">
               <span className="formula-term">
@@ -785,7 +788,7 @@ const Analysis = ({ data, onBackToHome }) => {
               <span className="formula-op">+</span>
               <span className="formula-term">
                 <span className="formula-value" style={{ color: getScoreColor(match_score) }}>{match_score}</span>
-                <span className="formula-label">JD Match</span>
+                <span className="formula-label">{hasJD ? 'JD Match' : 'Career Fit'}</span>
               </span>
               <span className="formula-op">× 40%</span>
               <span className="formula-op">=</span>
@@ -795,9 +798,11 @@ const Analysis = ({ data, onBackToHome }) => {
               </span>
             </div>
             <p className="formula-note">
-              A strong resume with mismatched skills gives a moderate final score — exactly the intended behaviour.
+              {hasJD
+                ? 'A strong resume with mismatched skills gives a moderate final score — exactly the intended behaviour.'
+                : 'ATS compatibility reflects resume quality and general career fit because no job description was provided.'}
             </p>
-          </div>
+          </div>}
         </div>
         {ats_improvements && ats_improvements.length > 0 && (
           <div className="ats-improvements-section">
@@ -880,7 +885,7 @@ const Analysis = ({ data, onBackToHome }) => {
         {/* Enhanced Suggested Roles with Match Percentage */}
         {suggested_roles && suggested_roles.length > 0 && (
           <div className="suggested-roles-section">
-            <h2>🎯 Suggested Job Roles</h2>
+            <h2>{hasJD ? '🎯 Suggested Job Roles' : '🎯 Potential Career Directions'}</h2>
             <div className="roles-grid">
               {suggested_roles.map((roleObj, index) => {
                 const roleName = typeof roleObj === 'string' ? roleObj : (roleObj.role || String(roleObj));
@@ -909,9 +914,9 @@ const Analysis = ({ data, onBackToHome }) => {
         )}
 
         {/* Enhanced Skills Section with Category Filters */}
-        {(matched_skills.length > 0 || missing_skills.length > 0) && (
+        {(matched_skills.length > 0 || (hasJD && missing_skills.length > 0)) && (
           <div className="skills-section">
-            <h2>🎨 Skills Analysis</h2>
+            <h2>{hasJD ? '🎨 Skills Analysis' : '🎨 Detected Resume Skills'}</h2>
             
             {/* Category Filter Tabs */}
             <div className="skill-category-tabs">
@@ -921,48 +926,48 @@ const Analysis = ({ data, onBackToHome }) => {
               >
                 All Skills
               </button>
-              <button 
+              {hasJD && <button 
                 className={`tab ${selectedSkillCategory === 'frontend' ? 'active' : ''}`}
                 onClick={() => setSelectedSkillCategory('frontend')}
               >
                 ⚛️ Frontend
-              </button>
-              <button 
+              </button>}
+              {hasJD && <button 
                 className={`tab ${selectedSkillCategory === 'backend' ? 'active' : ''}`}
                 onClick={() => setSelectedSkillCategory('backend')}
               >
                 🖥️ Backend
-              </button>
-              <button 
+              </button>}
+              {hasJD && <button 
                 className={`tab ${selectedSkillCategory === 'databases' ? 'active' : ''}`}
                 onClick={() => setSelectedSkillCategory('databases')}
               >
                 🗄️ Databases
-              </button>
-              <button 
+              </button>}
+              {hasJD && <button 
                 className={`tab ${selectedSkillCategory === 'cloud' ? 'active' : ''}`}
                 onClick={() => setSelectedSkillCategory('cloud')}
               >
                 ☁️ Cloud/DevOps
-              </button>
-              <button 
+              </button>}
+              {hasJD && <button 
                 className={`tab ${selectedSkillCategory === 'ai_ml' ? 'active' : ''}`}
                 onClick={() => setSelectedSkillCategory('ai_ml')}
               >
                 🤖 AI/ML
-              </button>
-              <button 
+              </button>}
+              {hasJD && <button 
                 className={`tab ${selectedSkillCategory === 'tools' ? 'active' : ''}`}
                 onClick={() => setSelectedSkillCategory('tools')}
               >
                 🛠️ Tools
-              </button>
+              </button>}
             </div>
 
             <div className="skills-grid">
               {matched_skills.length > 0 && (
                 <div className="skills-box">
-                  <h3>✅ Matched Skills</h3>
+                  <h3>{hasJD ? '✅ Matched Skills' : '✅ Skills Found in Resume'}</h3>
                   <div className="skills-tags">
                     {selectedSkillCategory === 'all' 
                       ? matched_skills.map((skill, index) => (
@@ -991,7 +996,7 @@ const Analysis = ({ data, onBackToHome }) => {
                   </div>
                 </div>
               )}
-              {missing_skills.length > 0 && (
+              {hasJD && missing_skills.length > 0 && (
                 <div className="skills-box missing-box">
                   <h3>❌ Missing Skills</h3>
                   <div className="skills-tags">

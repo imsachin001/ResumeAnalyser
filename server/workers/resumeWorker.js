@@ -37,6 +37,8 @@ const Redis      = require('ioredis');
 
 const resumeParser = require('../utils/resumeParserEnhanced');
 const aiAnalyzer   = require('../utils/aiAnalyzer');
+const atsCalculator = require('../utils/atsCalculator');
+const domainTemplates = require('../utils/domainTemplates');
 const { setCachedResult } = require('../utils/cacheService');
 const { QUEUE_NAME, redisConnection } = require('../utils/queue');
 const metrics      = require('../utils/metrics');
@@ -175,22 +177,14 @@ const processResumeJob = async (job) => {
     usedGemini = true;
   } else {
     // Graceful fallback when no API key is configured
-    const atsScore = aiAnalyzer.calculateAtsScore(parsedData);
-    analysisResult = {
-      ats_score:       atsScore,
-      match_score:     null,
-      summary:         'Basic analysis completed. Add a Gemini API key for full AI analysis.',
-      recommendations: [
-        'Add Gemini API key for comprehensive analysis',
-        'Ensure all contact information is present',
-        'Include quantifiable achievements',
-      ],
-      parsed_data: {
-        name:        parsedData.name,
-        contact:     parsedData.contact,
-        skills_list: parsedData.skills_list || [],
-      },
-    };
+    const detectedDomain = domainTemplates.detectDomain(parsedData.raw_text || '');
+    const resumeQuality = atsCalculator.calculateResumeQualityScore(parsedData);
+    const experience = parsedData.structured?.experience || parsedData.experience || [];
+    const experienceTimeline = atsCalculator.calculateExperienceTimeline(experience);
+    analysisResult = aiAnalyzer.createEnhancedFallbackAnalysis(
+      parsedData, detectedDomain, resumeQuality, experienceTimeline,
+      Boolean(jobDescription && jobDescription.trim()), jobDescription
+    );
     metrics.increment('jobs_fallback');
   }
   const geminiTotalMs = Date.now() - geminiStart;

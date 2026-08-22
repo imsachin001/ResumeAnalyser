@@ -155,11 +155,11 @@ class AIAnalyzer {
   // PROMPT BUILDERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  createDomainAwarePrompt(parsedData, detectedDomain) {
+  createResumeOnlyPrompt(parsedData, detectedDomain) {
     const structuredData = this.createFallbackStructure(parsedData);
     const domainInfo     = detectedDomain.template;
 
-    return `You are an expert resume analyzer with deep knowledge across multiple industries.
+    return `You are an expert resume quality and career coach with deep knowledge across multiple industries.
 
 DETECTED DOMAIN: ${detectedDomain.name}
 This resume appears to be for: ${detectedDomain.name}
@@ -170,22 +170,22 @@ ${domainInfo.important_skills.join(', ')}
 RESUME DATA (Structured JSON):
 ${JSON.stringify(structuredData, null, 2)}
 
-TASK: Analyze this resume for ${domainInfo.name} roles using domain-specific criteria.
+TASK: Analyze the resume on its own, without comparing it to any job description.
 
 STEP 1 — Skill Extraction
 Extract the hard skills explicitly found in the resume.
 CRITICAL: ONLY list skills that physically exist in the resume text. Do NOT hallucinate skills that you think the candidate *might* know based on their domain.
 
-STEP 2 — Holistic Match Scoring
-Provide a dynamic Job Match Score (0-100) assessing how well this candidate fits a generic ${domainInfo.name} role.
-- Use your expert judgment based on semantic depth, transferrable skills, and project quality.
-- DO NOT use a rigid calculation. A candidate with great core logic but missing a specific tool can still score 75+. A total mismatch should score under 40.
+STEP 2 — Resume Quality and Career Direction
+Assess the resume's ATS-readiness, clarity, evidence of impact, and likely career direction.
+- Do not compare the resume to a JD or invent JD requirements.
+- Suggestions must improve the resume itself or help the candidate present existing experience more clearly.
 
 RESPONSE FORMAT — return ONLY valid JSON, no markdown:
 {
   "match_score": <0–100, dynamic integer>,
   "matched_skills": ["ONLY skills explicitly found in the resume"],
-  "missing_skills": ["3–5 HIGH-IMPACT domain skills absent from resume"],
+  "missing_skills": [],
   "recommendations": ["4–6 SPECIFIC, ACTIONABLE improvements"],
   "strengths": ["3–5 key strengths"],
   "weaknesses": ["2–3 constructive improvement areas phrased positively"],
@@ -199,8 +199,9 @@ RESPONSE FORMAT — return ONLY valid JSON, no markdown:
 }
 
 QUALITY RULES:
-- match_score MUST be an intuitive, AI-assessed evaluation, not rigid math.
+- match_score is not a JD match score; it is only a generic domain-fit signal and must not be described as JD alignment.
 - matched_skills MUST be derived strictly from the candidate's resume.
+- missing_skills MUST be an empty array because no JD was provided.
 - fit_score values must never reach 100 — cap every fit_score at 95.
 - PROVIDE ONLY THE JSON. NO ADDITIONAL TEXT OR MARKDOWN.`;
   }
@@ -302,7 +303,7 @@ CRITICAL RULES:
 
       const prompt = hasJD
         ? this.createJDMatchPrompt(parsedData, jobDescription, detectedDomain)
-        : this.createDomainAwarePrompt(parsedData, detectedDomain);
+        : this.createResumeOnlyPrompt(parsedData, detectedDomain);
 
       // ── Fire both Gemini calls in parallel ──────────────────────────────────
       // Call #1 (main analysis) and Call #2 (ATS improvements) are independent —
@@ -406,7 +407,9 @@ CRITICAL RULES:
           ? `${projCount} project(s) (student/fresher)`
           : '0 yrs, 0 roles';
 
-      const atsCompatibility = Math.round(0.6 * resumeQuality.total + 0.4 * match_score);
+      const atsCompatibility = hasJD
+        ? Math.round(0.6 * resumeQuality.total + 0.4 * match_score)
+        : resumeQuality.total;
 
       const jd_match_breakdown = this.computeJDBreakdown(
         analysisData, parsedData, detectedDomain, jobDescription, hasJD, match_score
@@ -427,7 +430,6 @@ CRITICAL RULES:
         experience_timeline:      experienceTimeline,
         section_completeness:     this.calculateSectionCompleteness(parsedData)
       };
-
     } catch (err) {
       console.error('Gemini API error — switching to built-in analyzer:', err.message);
       // Seamless fallback: build a full analysis with the SAME response shape and
@@ -977,7 +979,9 @@ RESPONSE — ONLY valid JSON:
                     + jd_match_breakdown.professionalPresence;
     match_score = Math.min(Math.max(Math.round(match_score), 5), 95);
 
-    const atsCompatibility = Math.round(0.6 * resumeQuality.total + 0.4 * match_score);
+    const atsCompatibility = hasJD
+      ? Math.round(0.6 * resumeQuality.total + 0.4 * match_score)
+      : resumeQuality.total;
 
     const structured   = parsedData.structured || {};
     const profExpCount = (structured.experience || []).filter(e => e.type === 'professional').length;
