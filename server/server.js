@@ -367,7 +367,17 @@ initRedis().then(() => {
     console.log(`🔑 Gemini API     : ${!!(process.env.GEMINI_API_KEY?.trim()) ? '✅ configured' : '❌ missing'}`);
     console.log(`🗄️  Redis URL      : ${process.env.REDIS_URL || 'redis://localhost:6379'}`);
     console.log(`📬 BullMQ Queue   : resume-analysis`);
-    console.log(`\n💡 Start a worker with:  npm run worker\n`);
+
+    // ─── In-process worker (for single-dyno / free-tier deployments) ───────────
+    // Set RUN_WORKER=true in your deployment env vars (e.g. Render) to run the
+    // BullMQ worker inside this same process instead of as a separate service.
+    // Locally, leave RUN_WORKER unset and run `npm run worker` in a second terminal.
+    if (process.env.RUN_WORKER === 'true') {
+      require('./workers/resumeWorker');
+      console.log(`🔧 In-process worker started (RUN_WORKER=true)\n`);
+    } else {
+      console.log(`\n💡 Start a worker with:  npm run worker\n`);
+    }
   });
 });
 
