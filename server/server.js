@@ -373,8 +373,12 @@ initRedis().then(() => {
     // BullMQ worker inside this same process instead of as a separate service.
     // Locally, leave RUN_WORKER unset and run `npm run worker` in a second terminal.
     if (process.env.RUN_WORKER === 'true') {
-      require('./workers/resumeWorker');
-      console.log(`🔧 In-process worker started (RUN_WORKER=true)\n`);
+      try {
+        require('./workers/resumeWorker');
+        console.log(`🔧 In-process worker started (RUN_WORKER=true)\n`);
+      } catch (workerErr) {
+        console.error('❌ Failed to start in-process worker:', workerErr);
+      }
     } else {
       console.log(`\n💡 Start a worker with:  npm run worker\n`);
     }
